@@ -1,8 +1,10 @@
 # AI Lite
 
-A minimal Ruby client for simple chat-style calls through OpenAI's Responses API.
+AI Lite is a pure Ruby, dependency-light client for simple chat-style calls through OpenAI's Responses API.
 
-This gem is built for Rails apps and plain Ruby projects where installing a full OpenAI SDK is too heavy, incompatible, or unnecessary. It is especially useful in legacy Rails apps where dependency constraints make larger client libraries difficult to add.
+It is built for Rails apps and plain Ruby projects where installing a full OpenAI SDK is too heavy, incompatible, or unnecessary. It is especially useful in legacy Rails apps where Rails, ActiveSupport, Ruby, or HTTP-client dependency constraints make larger client libraries difficult to add.
+
+Use AI Lite when you want a small OpenAI client that works without tying your app to a specific Rails version or a larger dependency stack.
 
 This gem is intentionally small:
 
