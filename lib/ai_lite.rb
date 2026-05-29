@@ -106,12 +106,24 @@ class AiLite
     parsed_response = JSON.parse(response.body)
 
     unless success_status?(status)
-      return prettify_data(status: status, error: error_message(parsed_response), raw: parsed_response, debug: debug)
+      return prettify_data(
+        status: status,
+        error: error_message(parsed_response),
+        response_id: parsed_response["id"],
+        raw: parsed_response,
+        debug: debug
+      )
     end
 
     raw_content = extract_output_text(parsed_response)
     content = parse_content(raw_content)
-    prettify_data(status: status, content: content, raw: parsed_response, debug: debug)
+    prettify_data(
+      status: status,
+      content: content,
+      response_id: parsed_response["id"],
+      raw: parsed_response,
+      debug: debug
+    )
   rescue JSON::ParserError => e
     prettify_data(status: response_status(response), error: e.message, raw: response&.body, debug: debug)
   rescue => e
@@ -154,9 +166,10 @@ class AiLite
     response&.code&.to_i || "unknown"
   end
 
-  def prettify_data(status:, content: nil, error: nil, raw:, debug: false)
+  def prettify_data(status:, content: nil, error: nil, response_id: nil, raw:, debug: false)
     {
       "content" => content,
+      "response_id" => response_id,
       "status" => status,
       "error" => error,
       "raw" => debug ? raw : nil

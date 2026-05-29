@@ -91,6 +91,23 @@ The default model is `gpt-5.5`.
 
 The OpenAI API URL is fixed to `https://api.openai.com/v1/responses`.
 
+## Multi-Turn Chat
+
+Responses include a `response_id` that can be passed back through `options` as `previous_response_id`:
+
+```ruby
+first = ai.chat("Tell me a short joke.")
+
+follow_up = ai.chat(
+  "Explain why that is funny.",
+  options: {
+    previous_response_id: first["response_id"]
+  }
+)
+
+puts follow_up["content"]
+```
+
 ## Return Shape
 
 `chat` always returns a hash envelope.
@@ -100,6 +117,7 @@ Text output:
 ```ruby
 {
   "content" => "Hello!",
+  "response_id" => "resp_...",
   "status" => 200,
   "error" => nil,
   "raw" => nil
@@ -111,6 +129,7 @@ JSON-looking model output:
 ```ruby
 {
   "content" => { "valid" => true },
+  "response_id" => "resp_...",
   "status" => 200,
   "error" => nil,
   "raw" => nil
@@ -122,6 +141,7 @@ Failure:
 ```ruby
 {
   "content" => nil,
+  "response_id" => nil,
   "status" => 401,
   "error" => "Invalid API key",
   "raw" => nil
@@ -135,6 +155,7 @@ result = ai.chat("Say hello", debug: true)
 
 {
   "content" => "Hello!",
+  "response_id" => "resp_...",
   "status" => 200,
   "error" => nil,
   "raw" => { ... }

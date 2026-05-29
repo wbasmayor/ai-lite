@@ -130,6 +130,7 @@ class AiLiteTest < Minitest::Test
       payload = JSON.parse(request.body)
 
       assert_equal "Hello!", result["content"]
+      assert_equal "resp_test_123", result["response_id"]
       assert_equal 200, result["status"]
       assert_nil result["error"]
       assert_nil result["raw"]
@@ -196,9 +197,28 @@ class AiLiteTest < Minitest::Test
     end
   end
 
+  def test_chat_supports_previous_response_id_through_options
+    client = AiLite.new(api_key: "token-abc")
+
+    with_stubbed_http(success_response("Follow-up")) do |captured, _response|
+      result = client.chat(
+        "Explain why that is funny",
+        options: {
+          previous_response_id: "resp_previous_123"
+        }
+      )
+      payload = JSON.parse(captured[:http].last_request.body)
+
+      assert_equal "resp_previous_123", payload["previous_response_id"]
+      assert_equal "Follow-up", result["content"]
+      assert_equal "resp_test_123", result["response_id"]
+    end
+  end
+
   def test_extracts_text_from_nested_output_text_items
     client = AiLite.new(api_key: "token-abc")
     body = JSON.generate(
+      "id" => "resp_nested_123",
       "output" => [
         { "type" => "reasoning", "content" => [] },
         {
@@ -215,6 +235,7 @@ class AiLiteTest < Minitest::Test
       result = client.chat("Say hello")
 
       assert_equal "Hello world", result["content"]
+      assert_equal "resp_nested_123", result["response_id"]
       assert_equal 200, result["status"]
       assert_nil result["error"]
     end
@@ -264,6 +285,7 @@ class AiLiteTest < Minitest::Test
       result = client.chat("Say hello")
 
       assert_nil result["content"]
+      assert_nil result["response_id"]
       assert_equal 401, result["status"]
       assert_equal "Invalid API key", result["error"]
       assert_nil result["raw"]
@@ -291,6 +313,7 @@ class AiLiteTest < Minitest::Test
       result = client.chat("Say hello")
 
       assert_nil result["content"]
+      assert_nil result["response_id"]
       assert_equal 200, result["status"]
       assert_match(/unexpected token|unexpected character|parse/i, result["error"])
       assert_nil result["raw"]
@@ -321,6 +344,7 @@ class AiLiteTest < Minitest::Test
     result = client.chat("Say hello")
 
     assert_nil result["content"]
+    assert_nil result["response_id"]
     assert_equal "unknown", result["status"]
     assert_equal "connection failed", result["error"]
     assert_nil result["raw"]
@@ -332,6 +356,7 @@ class AiLiteTest < Minitest::Test
 
   def success_response(content)
     body = JSON.generate(
+      "id" => "resp_test_123",
       "output" => [
         {
           "type" => "message",
