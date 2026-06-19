@@ -1,3 +1,4 @@
+require "base64"
 require "json"
 require "net/http"
 require "uri"
@@ -6,15 +7,24 @@ require_relative "ai_lite/version"
 class AiLite
   API_BASE_URL = "https://api.openai.com/v1".freeze
   DEFAULT_MODEL = "gpt-5.5".freeze
+  DEFAULT_MODERATION_MODEL = "omni-moderation-latest".freeze
   DEFAULT_TIMEOUT = 120
   DEFAULT_MAX_OUTPUT_TOKENS = 2000
+  IMAGE_MIME_TYPES = {
+    ".gif" => "image/gif",
+    ".jpeg" => "image/jpeg",
+    ".jpg" => "image/jpeg",
+    ".png" => "image/png",
+    ".webp" => "image/webp"
+  }.freeze
 
   class Configuration
-    attr_accessor :api_key, :model, :timeout, :max_output_tokens
+    attr_accessor :api_key, :model, :moderation_model, :timeout, :max_output_tokens
 
     def initialize
       @api_key = nil
       @model = DEFAULT_MODEL
+      @moderation_model = DEFAULT_MODERATION_MODEL
       @timeout = DEFAULT_TIMEOUT
       @max_output_tokens = DEFAULT_MAX_OUTPUT_TOKENS
     end
@@ -45,18 +55,23 @@ class AiLite
       client.chat(message, **kwargs)
     end
 
+    def moderate(input = nil, **kwargs)
+      client.moderate(input, **kwargs)
+    end
+
     def reset_client!
       @client = nil
     end
   end
 
-  attr_reader :api_key, :model, :timeout, :max_output_tokens, :headers
+  attr_reader :api_key, :model, :moderation_model, :timeout, :max_output_tokens, :headers
 
-  def initialize(api_key: nil, model: nil, timeout: nil, max_output_tokens: nil)
+  def initialize(api_key: nil, model: nil, moderation_model: nil, timeout: nil, max_output_tokens: nil)
     @api_key = api_key || self.class.configuration.api_key || ENV["OPENAI_API_KEY"] || ENV["OPEN_AI_TOKEN"]
     raise ArgumentError, "Missing OpenAI API key" if @api_key.to_s.strip.empty?
 
     @model = model || self.class.configuration.model
+    @moderation_model = moderation_model || self.class.configuration.moderation_model
     @timeout = timeout || self.class.configuration.timeout
     @max_output_tokens = max_output_tokens || self.class.configuration.max_output_tokens
     @headers = {
@@ -78,10 +93,21 @@ class AiLite
     prettify_data(status: "unknown", error: e.message, raw: nil, debug: debug)
   end
 
+  def moderate(input = nil, model: nil, text: nil, image_url: nil, image_path: nil, debug: false, options: {})
+    payload = options.merge(
+      model: model || moderation_model,
+      input: moderation_input(input, text: text, image_url: image_url, image_path: image_path)
+    )
+
+    extract_moderation(post(payload, endpoint: moderation_endpoint), debug: debug)
+  rescue => e
+    prettify_data(status: "unknown", error: e.message, raw: nil, debug: debug)
+  end
+
   private
 
-  def post(payload)
-    uri = URI.parse(response_endpoint)
+  def post(payload, endpoint: response_endpoint)
+    uri = URI.parse(endpoint)
     request = Net::HTTP::Post.new(uri)
 
     headers.each do |key, value|
@@ -99,6 +125,10 @@ class AiLite
 
   def response_endpoint
     "#{API_BASE_URL}/responses"
+  end
+
+  def moderation_endpoint
+    "#{API_BASE_URL}/moderations"
   end
 
   def extract_content(response, debug: false)
@@ -130,6 +160,33 @@ class AiLite
     prettify_data(status: response_status(response), error: e.message, raw: nil, debug: debug)
   end
 
+  def extract_moderation(response, debug: false)
+    status = response.code.to_i
+    parsed_response = JSON.parse(response.body)
+
+    unless success_status?(status)
+      return prettify_data(
+        status: status,
+        error: error_message(parsed_response),
+        response_id: parsed_response["id"],
+        raw: parsed_response,
+        debug: debug
+      )
+    end
+
+    prettify_data(
+      status: status,
+      content: moderation_content(parsed_response),
+      response_id: parsed_response["id"],
+      raw: parsed_response,
+      debug: debug
+    )
+  rescue JSON::ParserError => e
+    prettify_data(status: response_status(response), error: e.message, raw: response&.body, debug: debug)
+  rescue => e
+    prettify_data(status: response_status(response), error: e.message, raw: nil, debug: debug)
+  end
+
   def extract_output_text(raw)
     Array(raw["output"]).flat_map do |item|
       next [] unless item.is_a?(Hash) && item["type"] == "message"
@@ -148,6 +205,52 @@ class AiLite
     JSON.parse(raw_text)
   rescue JSON::ParserError
     raw_text
+  end
+
+  def moderation_input(input, text:, image_url:, image_path:)
+    unless text || image_url || image_path
+      raise ArgumentError, "Missing moderation input" if input.nil?
+
+      return input
+    end
+
+    items = []
+    items.concat(Array(input).map { |value| moderation_input_item(value) }) unless input.nil?
+    items << { type: "text", text: text } if text
+    items << { type: "image_url", image_url: { url: image_url } } if image_url
+    items << { type: "image_url", image_url: { url: image_data_url(image_path) } } if image_path
+    raise ArgumentError, "Missing moderation input" if items.empty?
+
+    items
+  end
+
+  def moderation_input_item(value)
+    case value
+    when String
+      { type: "text", text: value }
+    when Hash
+      value
+    else
+      raise ArgumentError, "Unsupported moderation input item: #{value.class}"
+    end
+  end
+
+  def image_data_url(path)
+    mime_type = image_mime_type(path)
+    "data:#{mime_type};base64,#{Base64.strict_encode64(File.binread(path))}"
+  end
+
+  def image_mime_type(path)
+    IMAGE_MIME_TYPES.fetch(File.extname(path).downcase) do
+      raise ArgumentError, "Unsupported image type for moderation: #{File.extname(path)}"
+    end
+  end
+
+  def moderation_content(raw)
+    results = raw["results"]
+    return nil unless results.is_a?(Array)
+
+    results.length == 1 ? results.first : results
   end
 
   def success_status?(status)

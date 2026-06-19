@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "tempfile"
 
 class AiLiteTest < Minitest::Test
   FakeResponse = Struct.new(:code, :body)
@@ -37,6 +38,7 @@ class AiLiteTest < Minitest::Test
 
       assert_equal "explicit-key", client.api_key
       assert_equal "gpt-test", client.model
+      assert_equal "omni-moderation-latest", client.moderation_model
       assert_equal 10, client.timeout
       assert_equal 2000, client.max_output_tokens
       assert_equal "Bearer explicit-key", client.headers["Authorization"]
@@ -49,6 +51,7 @@ class AiLiteTest < Minitest::Test
       AiLite.configure do |config|
         config.api_key = "configured-key"
         config.model = "gpt-config"
+        config.moderation_model = "omni-moderation-test"
         config.timeout = 15
         config.max_output_tokens = 750
       end
@@ -57,6 +60,7 @@ class AiLiteTest < Minitest::Test
 
       assert_equal "configured-key", client.api_key
       assert_equal "gpt-config", client.model
+      assert_equal "omni-moderation-test", client.moderation_model
       assert_equal 15, client.timeout
       assert_equal 750, client.max_output_tokens
       assert_same client, AiLite.client
@@ -78,6 +82,7 @@ class AiLiteTest < Minitest::Test
     AiLite.configure do |config|
       config.api_key = "configured-key"
       config.model = "gpt-config"
+      config.moderation_model = "omni-moderation-config"
       config.timeout = 15
       config.max_output_tokens = 750
     end
@@ -85,12 +90,14 @@ class AiLiteTest < Minitest::Test
     client = AiLite.new(
       api_key: "explicit-key",
       model: "gpt-explicit",
+      moderation_model: "omni-moderation-explicit",
       timeout: 5,
       max_output_tokens: 300
     )
 
     assert_equal "explicit-key", client.api_key
     assert_equal "gpt-explicit", client.model
+    assert_equal "omni-moderation-explicit", client.moderation_model
     assert_equal 5, client.timeout
     assert_equal 300, client.max_output_tokens
   end
@@ -277,6 +284,149 @@ class AiLiteTest < Minitest::Test
     end
   end
 
+  def test_moderate_sends_post_to_moderations_with_default_payload
+    client = AiLite.new(api_key: "token-abc")
+
+    with_stubbed_http(moderation_response) do |captured, _response|
+      result = client.moderate("Some user submitted text")
+      request = captured[:http].last_request
+      payload = JSON.parse(request.body)
+
+      assert_equal false, result["content"]["flagged"]
+      assert_equal "modr_test_123", result["response_id"]
+      assert_equal 200, result["status"]
+      assert_nil result["error"]
+      assert_nil result["raw"]
+      assert_equal "api.openai.com", captured[:host]
+      assert_equal 443, captured[:port]
+      assert_equal true, captured[:use_ssl]
+      assert_instance_of Net::HTTP::Post, request
+      assert_equal "/v1/moderations", request.path
+      assert_equal "Bearer token-abc", request["Authorization"]
+      assert_equal "application/json", request["Content-Type"]
+      assert_equal "omni-moderation-latest", payload["model"]
+      assert_equal "Some user submitted text", payload["input"]
+    end
+  end
+
+  def test_moderate_uses_class_level_configured_client
+    AiLite.configure do |config|
+      config.api_key = "configured-key"
+      config.moderation_model = "omni-moderation-config"
+    end
+
+    with_stubbed_http(moderation_response) do |captured, _response|
+      AiLite.moderate("Use configured defaults")
+      payload = JSON.parse(captured[:http].last_request.body)
+
+      assert_equal "omni-moderation-config", payload["model"]
+      assert_equal "Bearer configured-key", captured[:http].last_request["Authorization"]
+    end
+  end
+
+  def test_moderate_accepts_text_and_image_url_keywords
+    client = AiLite.new(api_key: "token-abc")
+
+    with_stubbed_http(moderation_response) do |captured, _response|
+      client.moderate(
+        text: "Profile caption",
+        image_url: "https://example.com/image.png"
+      )
+      payload = JSON.parse(captured[:http].last_request.body)
+
+      assert_equal(
+        [
+          { "type" => "text", "text" => "Profile caption" },
+          {
+            "type" => "image_url",
+            "image_url" => { "url" => "https://example.com/image.png" }
+          }
+        ],
+        payload["input"]
+      )
+    end
+  end
+
+  def test_moderate_accepts_raw_openai_input_shape
+    client = AiLite.new(api_key: "token-abc")
+    input = [
+      { type: "text", text: "Caption" },
+      {
+        type: "image_url",
+        image_url: {
+          url: "https://example.com/image.png"
+        }
+      }
+    ]
+
+    with_stubbed_http(moderation_response) do |captured, _response|
+      client.moderate(input)
+      payload = JSON.parse(captured[:http].last_request.body)
+
+      assert_equal(
+        [
+          { "type" => "text", "text" => "Caption" },
+          {
+            "type" => "image_url",
+            "image_url" => { "url" => "https://example.com/image.png" }
+          }
+        ],
+        payload["input"]
+      )
+    end
+  end
+
+  def test_moderate_reads_image_path_as_data_url
+    client = AiLite.new(api_key: "token-abc")
+
+    Tempfile.create(["moderation", ".png"]) do |file|
+      file.binmode
+      file.write("fake image")
+      file.flush
+
+      with_stubbed_http(moderation_response) do |captured, _response|
+        client.moderate(image_path: file.path)
+        payload = JSON.parse(captured[:http].last_request.body)
+
+        assert_equal(
+          [
+            {
+              "type" => "image_url",
+              "image_url" => { "url" => "data:image/png;base64,ZmFrZSBpbWFnZQ==" }
+            }
+          ],
+          payload["input"]
+        )
+      end
+    end
+  end
+
+  def test_moderate_returns_all_results_for_multiple_inputs
+    client = AiLite.new(api_key: "token-abc")
+    safe_result = moderation_result(flagged: false)
+    flagged_result = moderation_result(flagged: true)
+
+    with_stubbed_http(moderation_response(results: [safe_result, flagged_result])) do |_captured, _response|
+      result = client.moderate(["Safe text", "Risky text"])
+
+      assert_equal [safe_result, flagged_result], result["content"]
+      assert_equal 200, result["status"]
+      assert_nil result["error"]
+    end
+  end
+
+  def test_moderate_local_input_errors_return_standard_envelope
+    client = AiLite.new(api_key: "token-abc")
+
+    result = client.moderate
+
+    assert_nil result["content"]
+    assert_nil result["response_id"]
+    assert_equal "unknown", result["status"]
+    assert_equal "Missing moderation input", result["error"]
+    assert_nil result["raw"]
+  end
+
   def test_http_errors_return_standard_envelope
     client = AiLite.new(api_key: "token-abc")
     body = JSON.generate("error" => { "message" => "Invalid API key" })
@@ -367,6 +517,29 @@ class AiLiteTest < Minitest::Test
       ]
     )
     FakeResponse.new("200", body)
+  end
+
+  def moderation_response(results: [moderation_result])
+    body = JSON.generate(
+      "id" => "modr_test_123",
+      "model" => "omni-moderation-latest",
+      "results" => results
+    )
+    FakeResponse.new("200", body)
+  end
+
+  def moderation_result(flagged: false)
+    {
+      "flagged" => flagged,
+      "categories" => {
+        "hate" => false,
+        "violence" => flagged
+      },
+      "category_scores" => {
+        "hate" => 0.01,
+        "violence" => flagged ? 0.95 : 0.02
+      }
+    }
   end
 
   def with_env(values)

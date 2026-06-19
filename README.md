@@ -1,6 +1,6 @@
 # AI Lite
 
-AI Lite is a pure Ruby, dependency-light client for simple chat-style calls through OpenAI's Responses API.
+AI Lite is a pure Ruby, dependency-light client for simple OpenAI API calls.
 
 It is built for Rails apps and plain Ruby projects where installing a full OpenAI SDK is too heavy, incompatible, or unnecessary. It is especially useful in legacy Rails apps where Rails, ActiveSupport, Ruby, or HTTP-client dependency constraints make larger client libraries difficult to add.
 
@@ -11,12 +11,13 @@ This gem is intentionally small:
 - No Rails dependency
 - No official OpenAI gem dependency
 - No Faraday, HTTParty, ActiveSupport, or connection pool dependency
-- Uses only Ruby stdlib: `Net::HTTP`, `URI`, and `JSON`
+- Uses only Ruby stdlib: `Net::HTTP`, `URI`, `JSON`, and `Base64`
 
-It is not meant to replace the official OpenAI SDK. It is a small wrapper for projects that only need one clean interface:
+It is not meant to replace the official OpenAI SDK. It is a small wrapper for projects that only need a few clean interfaces:
 
 ```ruby
 ai.chat("Say hello")
+ai.moderate("User submitted text")
 ```
 
 ## Usage
@@ -47,6 +48,7 @@ In Rails, configure the default client from an initializer:
 AiLite.configure do |config|
   config.api_key = ENV["OPENAI_API_KEY"]
   config.model = "gpt-5.5"
+  config.moderation_model = "omni-moderation-latest"
   config.timeout = 120
   config.max_output_tokens = 2000
 end
@@ -91,6 +93,84 @@ The default model is `gpt-5.5`.
 
 The OpenAI API URL is fixed to `https://api.openai.com/v1/responses`.
 
+## Moderation
+
+Use `moderate` to classify user-submitted text or images for potentially harmful content before saving, publishing, or sending it into another AI call.
+
+A common use case is checking a comment before it is shown publicly:
+
+```ruby
+comment = "User submitted comment"
+result = ai.moderate(comment)
+
+if result["content"]["flagged"]
+  # hide, block, or route the comment to review
+else
+  # publish the comment
+end
+```
+
+Moderation responses include an overall `flagged` value plus category booleans and scores:
+
+```ruby
+{
+  "content" => {
+    "flagged" => false,
+    "categories" => {
+      "hate" => false,
+      "violence" => false
+    },
+    "category_scores" => {
+      "hate" => 0.01,
+      "violence" => 0.02
+    }
+  },
+  "response_id" => "modr_...",
+  "status" => 200,
+  "error" => nil,
+  "raw" => nil
+}
+```
+
+`moderate` sends a `POST` request to `/v1/moderations` with:
+
+- `model`
+- `input`
+- optional extra `options`
+
+The default moderation model is `omni-moderation-latest`.
+
+You can pass an image URL:
+
+```ruby
+result = ai.moderate(
+  text: "Profile caption",
+  image_url: "https://example.com/image.png"
+)
+```
+
+Or a local image path:
+
+```ruby
+result = ai.moderate(image_path: "tmp/upload.png")
+```
+
+Local images are read, base64 encoded, and sent as JSON data URLs. They do not use multipart uploads. Supported local image extensions are `.gif`, `.jpeg`, `.jpg`, `.png`, and `.webp`.
+
+You can also pass OpenAI's raw moderation input shape directly:
+
+```ruby
+result = ai.moderate([
+  { type: "text", text: "Caption" },
+  {
+    type: "image_url",
+    image_url: {
+      url: "https://example.com/image.png"
+    }
+  }
+])
+```
+
 ## Multi-Turn Chat
 
 Responses include a `response_id` that can be passed back through `options` as `previous_response_id`:
@@ -110,7 +190,7 @@ puts follow_up["content"]
 
 ## Return Shape
 
-`chat` always returns a hash envelope.
+Methods return a hash envelope.
 
 Text output:
 
