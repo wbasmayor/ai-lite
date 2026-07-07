@@ -39,6 +39,7 @@ class AiLiteTest < Minitest::Test
       assert_equal "explicit-key", client.api_key
       assert_equal "gpt-test", client.model
       assert_equal "omni-moderation-latest", client.moderation_model
+      assert_equal "text-embedding-3-small", client.embedding_model
       assert_equal 10, client.timeout
       assert_equal 2000, client.max_output_tokens
       assert_equal "Bearer explicit-key", client.headers["Authorization"]
@@ -52,6 +53,7 @@ class AiLiteTest < Minitest::Test
         config.api_key = "configured-key"
         config.model = "gpt-config"
         config.moderation_model = "omni-moderation-test"
+        config.embedding_model = "text-embedding-test"
         config.timeout = 15
         config.max_output_tokens = 750
       end
@@ -61,6 +63,7 @@ class AiLiteTest < Minitest::Test
       assert_equal "configured-key", client.api_key
       assert_equal "gpt-config", client.model
       assert_equal "omni-moderation-test", client.moderation_model
+      assert_equal "text-embedding-test", client.embedding_model
       assert_equal 15, client.timeout
       assert_equal 750, client.max_output_tokens
       assert_same client, AiLite.client
@@ -83,6 +86,7 @@ class AiLiteTest < Minitest::Test
       config.api_key = "configured-key"
       config.model = "gpt-config"
       config.moderation_model = "omni-moderation-config"
+      config.embedding_model = "text-embedding-config"
       config.timeout = 15
       config.max_output_tokens = 750
     end
@@ -91,6 +95,7 @@ class AiLiteTest < Minitest::Test
       api_key: "explicit-key",
       model: "gpt-explicit",
       moderation_model: "omni-moderation-explicit",
+      embedding_model: "text-embedding-explicit",
       timeout: 5,
       max_output_tokens: 300
     )
@@ -98,6 +103,7 @@ class AiLiteTest < Minitest::Test
     assert_equal "explicit-key", client.api_key
     assert_equal "gpt-explicit", client.model
     assert_equal "omni-moderation-explicit", client.moderation_model
+    assert_equal "text-embedding-explicit", client.embedding_model
     assert_equal 5, client.timeout
     assert_equal 300, client.max_output_tokens
   end
@@ -427,6 +433,98 @@ class AiLiteTest < Minitest::Test
     assert_nil result["raw"]
   end
 
+  def test_embed_sends_post_to_embeddings_with_default_payload
+    client = AiLite.new(api_key: "token-abc")
+
+    with_stubbed_http(embedding_response([[0.12, -0.34, 0.56]])) do |captured, _response|
+      result = client.embed("Text to vectorize")
+      request = captured[:http].last_request
+      payload = JSON.parse(request.body)
+
+      assert_equal [0.12, -0.34, 0.56], result["content"]
+      assert_nil result["response_id"]
+      assert_equal 200, result["status"]
+      assert_nil result["error"]
+      assert_nil result["raw"]
+      assert_equal "api.openai.com", captured[:host]
+      assert_equal 443, captured[:port]
+      assert_equal true, captured[:use_ssl]
+      assert_instance_of Net::HTTP::Post, request
+      assert_equal "/v1/embeddings", request.path
+      assert_equal "Bearer token-abc", request["Authorization"]
+      assert_equal "application/json", request["Content-Type"]
+      assert_equal "text-embedding-3-small", payload["model"]
+      assert_equal "Text to vectorize", payload["input"]
+    end
+  end
+
+  def test_embed_returns_vector_list_for_multiple_inputs
+    client = AiLite.new(api_key: "token-abc")
+    embeddings = [
+      [0.11, 0.22, 0.33],
+      [0.44, 0.55, 0.66]
+    ]
+
+    with_stubbed_http(embedding_response(embeddings)) do |captured, _response|
+      result = client.embed(["First text", "Second text"])
+      payload = JSON.parse(captured[:http].last_request.body)
+
+      assert_equal ["First text", "Second text"], payload["input"]
+      assert_equal embeddings, result["content"]
+      assert_equal 200, result["status"]
+      assert_nil result["error"]
+    end
+  end
+
+  def test_embed_includes_options_dimensions_encoding_format_and_model
+    client = AiLite.new(api_key: "token-abc")
+
+    with_stubbed_http(embedding_response([[0.12, -0.34]])) do |captured, _response|
+      client.embed(
+        "Short text",
+        model: "text-embedding-3-large",
+        dimensions: 2,
+        encoding_format: "float",
+        options: {
+          user: "user-123"
+        }
+      )
+      payload = JSON.parse(captured[:http].last_request.body)
+
+      assert_equal "text-embedding-3-large", payload["model"]
+      assert_equal "Short text", payload["input"]
+      assert_equal 2, payload["dimensions"]
+      assert_equal "float", payload["encoding_format"]
+      assert_equal "user-123", payload["user"]
+    end
+  end
+
+  def test_embed_uses_class_level_configured_client
+    AiLite.configure do |config|
+      config.api_key = "configured-key"
+      config.embedding_model = "text-embedding-config"
+    end
+
+    with_stubbed_http(embedding_response([[0.12, -0.34, 0.56]])) do |captured, _response|
+      AiLite.embed("Use configured defaults")
+      payload = JSON.parse(captured[:http].last_request.body)
+
+      assert_equal "text-embedding-config", payload["model"]
+      assert_equal "Bearer configured-key", captured[:http].last_request["Authorization"]
+    end
+  end
+
+  def test_embed_debug_true_returns_raw_usage
+    client = AiLite.new(api_key: "token-abc")
+
+    with_stubbed_http(embedding_response([[0.12, -0.34, 0.56]])) do |_captured, _response|
+      result = client.embed("Text to vectorize", debug: true)
+
+      assert_equal [0.12, -0.34, 0.56], result["content"]
+      assert_equal({ "prompt_tokens" => 4, "total_tokens" => 4 }, result["raw"]["usage"])
+    end
+  end
+
   def test_http_errors_return_standard_envelope
     client = AiLite.new(api_key: "token-abc")
     body = JSON.generate("error" => { "message" => "Invalid API key" })
@@ -540,6 +638,25 @@ class AiLiteTest < Minitest::Test
         "violence" => flagged ? 0.95 : 0.02
       }
     }
+  end
+
+  def embedding_response(embeddings)
+    body = JSON.generate(
+      "object" => "list",
+      "data" => embeddings.each_with_index.map do |embedding, index|
+        {
+          "object" => "embedding",
+          "index" => index,
+          "embedding" => embedding
+        }
+      end,
+      "model" => "text-embedding-3-small",
+      "usage" => {
+        "prompt_tokens" => 4,
+        "total_tokens" => 4
+      }
+    )
+    FakeResponse.new("200", body)
   end
 
   def with_env(values)

@@ -18,6 +18,7 @@ It is not meant to replace the official OpenAI SDK. It is a small wrapper for pr
 ```ruby
 ai.chat("Say hello")
 ai.moderate("User submitted text")
+ai.embed("Text to vectorize")
 ```
 
 ## Usage
@@ -49,6 +50,7 @@ AiLite.configure do |config|
   config.api_key = ENV["OPENAI_API_KEY"]
   config.model = "gpt-5.5"
   config.moderation_model = "omni-moderation-latest"
+  config.embedding_model = "text-embedding-3-small"
   config.timeout = 120
   config.max_output_tokens = 2000
 end
@@ -169,6 +171,72 @@ result = ai.moderate([
     }
   }
 ])
+```
+
+## Embeddings
+
+Use `embed` to turn text into vectors that can be stored and compared for semantic search, recommendations, duplicate detection, or retrieval-augmented generation.
+
+```ruby
+result = ai.embed("How do I reset my password?")
+vector = result["content"]
+```
+
+For one string input, `content` is the embedding vector:
+
+```ruby
+{
+  "content" => [0.012, -0.44, 0.203],
+  "response_id" => nil,
+  "status" => 200,
+  "error" => nil,
+  "raw" => nil
+}
+```
+
+For multiple inputs, `content` is an array of vectors in the same order:
+
+```ruby
+result = ai.embed([
+  "How do I reset my password?",
+  "How do I update my billing card?"
+])
+
+vectors = result["content"]
+first_vector = vectors[0]
+```
+
+```ruby
+{
+  "content" => [
+    [0.012, -0.44, 0.203],
+    [0.332, 0.021, -0.118]
+  ],
+  "response_id" => nil,
+  "status" => 200,
+  "error" => nil,
+  "raw" => nil
+}
+```
+
+`embed` sends a `POST` request to `/v1/embeddings` with:
+
+- `model`
+- `input`
+- optional `dimensions`
+- optional `encoding_format`
+- optional `debug`
+- optional extra `options`
+
+The default embedding model is `text-embedding-3-small`.
+
+Pass `debug: true` to include the raw OpenAI response, including token usage:
+
+```ruby
+result = ai.embed("Hello", debug: true)
+
+result["content"]       # embedding vector
+result["raw"]["usage"]  # token usage
 ```
 
 ## Multi-Turn Chat
