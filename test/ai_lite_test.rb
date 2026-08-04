@@ -33,6 +33,7 @@ class AiLiteTest < Minitest::Test
       client = AiLite.new(
         api_key: "explicit-key",
         model: "gpt-test",
+        image_model: "gpt-image-test",
         timeout: 10
       )
 
@@ -40,6 +41,7 @@ class AiLiteTest < Minitest::Test
       assert_equal "gpt-test", client.model
       assert_equal "omni-moderation-latest", client.moderation_model
       assert_equal "text-embedding-3-small", client.embedding_model
+      assert_equal "gpt-image-test", client.image_model
       assert_equal 10, client.timeout
       assert_equal 2000, client.max_output_tokens
       assert_equal "Bearer explicit-key", client.headers["Authorization"]
@@ -54,6 +56,7 @@ class AiLiteTest < Minitest::Test
         config.model = "gpt-config"
         config.moderation_model = "omni-moderation-test"
         config.embedding_model = "text-embedding-test"
+        config.image_model = "gpt-image-test"
         config.timeout = 15
         config.max_output_tokens = 750
       end
@@ -64,6 +67,7 @@ class AiLiteTest < Minitest::Test
       assert_equal "gpt-config", client.model
       assert_equal "omni-moderation-test", client.moderation_model
       assert_equal "text-embedding-test", client.embedding_model
+      assert_equal "gpt-image-test", client.image_model
       assert_equal 15, client.timeout
       assert_equal 750, client.max_output_tokens
       assert_same client, AiLite.client
@@ -87,6 +91,7 @@ class AiLiteTest < Minitest::Test
       config.model = "gpt-config"
       config.moderation_model = "omni-moderation-config"
       config.embedding_model = "text-embedding-config"
+      config.image_model = "gpt-image-config"
       config.timeout = 15
       config.max_output_tokens = 750
     end
@@ -96,6 +101,7 @@ class AiLiteTest < Minitest::Test
       model: "gpt-explicit",
       moderation_model: "omni-moderation-explicit",
       embedding_model: "text-embedding-explicit",
+      image_model: "gpt-image-explicit",
       timeout: 5,
       max_output_tokens: 300
     )
@@ -104,6 +110,7 @@ class AiLiteTest < Minitest::Test
     assert_equal "gpt-explicit", client.model
     assert_equal "omni-moderation-explicit", client.moderation_model
     assert_equal "text-embedding-explicit", client.embedding_model
+    assert_equal "gpt-image-explicit", client.image_model
     assert_equal 5, client.timeout
     assert_equal 300, client.max_output_tokens
   end
@@ -525,6 +532,118 @@ class AiLiteTest < Minitest::Test
     end
   end
 
+  def test_image_sends_post_to_images_with_default_payload
+    client = AiLite.new(api_key: "token-abc")
+    image_data = Base64.strict_encode64("fake image")
+
+    with_stubbed_http(image_response(b64_json: image_data)) do |captured, _response|
+      result = client.image("A small ruby gem logo")
+      request = captured[:http].last_request
+      payload = JSON.parse(request.body)
+
+      assert_equal image_data, result["content"]
+      assert_nil result["response_id"]
+      assert_equal 200, result["status"]
+      assert_nil result["error"]
+      assert_nil result["raw"]
+      assert_equal "api.openai.com", captured[:host]
+      assert_equal 443, captured[:port]
+      assert_equal true, captured[:use_ssl]
+      assert_instance_of Net::HTTP::Post, request
+      assert_equal "/v1/images/generations", request.path
+      assert_equal "Bearer token-abc", request["Authorization"]
+      assert_equal "application/json", request["Content-Type"]
+      assert_equal "gpt-image-2", payload["model"]
+      assert_equal "A small ruby gem logo", payload["prompt"]
+    end
+  end
+
+  def test_image_includes_options_size_quality_background_output_format_and_model
+    client = AiLite.new(api_key: "token-abc")
+
+    with_stubbed_http(image_response) do |captured, _response|
+      client.image(
+        "A transparent app icon",
+        model: "gpt-image-test",
+        size: "1024x1536",
+        quality: "high",
+        background: "transparent",
+        output_format: "webp",
+        options: {
+          moderation: "auto",
+          output_compression: 80
+        }
+      )
+      payload = JSON.parse(captured[:http].last_request.body)
+
+      assert_equal "gpt-image-test", payload["model"]
+      assert_equal "A transparent app icon", payload["prompt"]
+      assert_equal "1024x1536", payload["size"]
+      assert_equal "high", payload["quality"]
+      assert_equal "transparent", payload["background"]
+      assert_equal "webp", payload["output_format"]
+      assert_equal "auto", payload["moderation"]
+      assert_equal 80, payload["output_compression"]
+    end
+  end
+
+  def test_image_uses_class_level_configured_client
+    AiLite.configure do |config|
+      config.api_key = "configured-key"
+      config.image_model = "gpt-image-config"
+    end
+
+    with_stubbed_http(image_response) do |captured, _response|
+      AiLite.image("Use configured defaults")
+      payload = JSON.parse(captured[:http].last_request.body)
+
+      assert_equal "gpt-image-config", payload["model"]
+      assert_equal "Bearer configured-key", captured[:http].last_request["Authorization"]
+    end
+  end
+
+  def test_image_writes_decoded_content_to_output_path
+    client = AiLite.new(api_key: "token-abc")
+    image_data = Base64.strict_encode64("fake image")
+
+    Tempfile.create(["generated", ".png"]) do |file|
+      with_stubbed_http(image_response(b64_json: image_data)) do |_captured, _response|
+        result = client.image("A file output", output_path: file.path)
+
+        assert_equal image_data, result["content"]
+        assert_equal "fake image", File.binread(file.path)
+      end
+    end
+  end
+
+  def test_image_debug_true_returns_raw_usage
+    client = AiLite.new(api_key: "token-abc")
+    image_data = Base64.strict_encode64("fake image")
+
+    with_stubbed_http(image_response(b64_json: image_data)) do |_captured, _response|
+      result = client.image("A debuggable image", debug: true)
+
+      assert_equal image_data, result["content"]
+      assert_equal({ "input_tokens" => 10, "output_tokens" => 20, "total_tokens" => 30 }, result["raw"]["usage"])
+    end
+  end
+
+  def test_image_output_path_without_image_data_returns_standard_envelope
+    client = AiLite.new(api_key: "token-abc")
+
+    Tempfile.create(["generated", ".png"]) do |file|
+      with_stubbed_http(image_response(b64_json: nil)) do |_captured, _response|
+        result = client.image("A missing image", output_path: file.path)
+
+        assert_nil result["content"]
+        assert_nil result["response_id"]
+        assert_equal 200, result["status"]
+        assert_equal "No image data returned", result["error"]
+        assert_nil result["raw"]
+      end
+    end
+  end
+
   def test_http_errors_return_standard_envelope
     client = AiLite.new(api_key: "token-abc")
     body = JSON.generate("error" => { "message" => "Invalid API key" })
@@ -654,6 +773,26 @@ class AiLiteTest < Minitest::Test
       "usage" => {
         "prompt_tokens" => 4,
         "total_tokens" => 4
+      }
+    )
+    FakeResponse.new("200", body)
+  end
+
+  def image_response(b64_json: Base64.strict_encode64("fake image"))
+    image = {}
+    image["b64_json"] = b64_json if b64_json
+
+    body = JSON.generate(
+      "created" => 1_713_833_628,
+      "background" => "opaque",
+      "data" => [image],
+      "output_format" => "png",
+      "quality" => "medium",
+      "size" => "1024x1024",
+      "usage" => {
+        "input_tokens" => 10,
+        "output_tokens" => 20,
+        "total_tokens" => 30
       }
     )
     FakeResponse.new("200", body)

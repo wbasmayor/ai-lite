@@ -9,6 +9,7 @@ class AiLite
   DEFAULT_MODEL = "gpt-5.5".freeze
   DEFAULT_MODERATION_MODEL = "omni-moderation-latest".freeze
   DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small".freeze
+  DEFAULT_IMAGE_MODEL = "gpt-image-2".freeze
   DEFAULT_TIMEOUT = 120
   DEFAULT_MAX_OUTPUT_TOKENS = 2000
   IMAGE_MIME_TYPES = {
@@ -20,13 +21,14 @@ class AiLite
   }.freeze
 
   class Configuration
-    attr_accessor :api_key, :model, :moderation_model, :embedding_model, :timeout, :max_output_tokens
+    attr_accessor :api_key, :model, :moderation_model, :embedding_model, :image_model, :timeout, :max_output_tokens
 
     def initialize
       @api_key = nil
       @model = DEFAULT_MODEL
       @moderation_model = DEFAULT_MODERATION_MODEL
       @embedding_model = DEFAULT_EMBEDDING_MODEL
+      @image_model = DEFAULT_IMAGE_MODEL
       @timeout = DEFAULT_TIMEOUT
       @max_output_tokens = DEFAULT_MAX_OUTPUT_TOKENS
     end
@@ -65,20 +67,25 @@ class AiLite
       client.embed(input, **kwargs)
     end
 
+    def image(prompt, **kwargs)
+      client.image(prompt, **kwargs)
+    end
+
     def reset_client!
       @client = nil
     end
   end
 
-  attr_reader :api_key, :model, :moderation_model, :embedding_model, :timeout, :max_output_tokens, :headers
+  attr_reader :api_key, :model, :moderation_model, :embedding_model, :image_model, :timeout, :max_output_tokens, :headers
 
-  def initialize(api_key: nil, model: nil, moderation_model: nil, embedding_model: nil, timeout: nil, max_output_tokens: nil)
+  def initialize(api_key: nil, model: nil, moderation_model: nil, embedding_model: nil, image_model: nil, timeout: nil, max_output_tokens: nil)
     @api_key = api_key || self.class.configuration.api_key || ENV["OPENAI_API_KEY"] || ENV["OPEN_AI_TOKEN"]
     raise ArgumentError, "Missing OpenAI API key" if @api_key.to_s.strip.empty?
 
     @model = model || self.class.configuration.model
     @moderation_model = moderation_model || self.class.configuration.moderation_model
     @embedding_model = embedding_model || self.class.configuration.embedding_model
+    @image_model = image_model || self.class.configuration.image_model
     @timeout = timeout || self.class.configuration.timeout
     @max_output_tokens = max_output_tokens || self.class.configuration.max_output_tokens
     @headers = {
@@ -124,6 +131,21 @@ class AiLite
     prettify_data(status: "unknown", error: e.message, raw: nil, debug: debug)
   end
 
+  def image(prompt, model: nil, size: nil, quality: nil, background: nil, output_format: nil, output_path: nil, debug: false, options: {})
+    payload = options.merge(
+      model: model || image_model,
+      prompt: prompt
+    )
+    payload[:size] = size if size
+    payload[:quality] = quality if quality
+    payload[:background] = background if background
+    payload[:output_format] = output_format if output_format
+
+    extract_image(post(payload, endpoint: image_endpoint), output_path: output_path, debug: debug)
+  rescue => e
+    prettify_data(status: "unknown", error: e.message, raw: nil, debug: debug)
+  end
+
   private
 
   def post(payload, endpoint: response_endpoint)
@@ -153,6 +175,10 @@ class AiLite
 
   def embedding_endpoint
     "#{API_BASE_URL}/embeddings"
+  end
+
+  def image_endpoint
+    "#{API_BASE_URL}/images/generations"
   end
 
   def extract_content(response, debug: false)
@@ -238,6 +264,36 @@ class AiLite
     prettify_data(status: response_status(response), error: e.message, raw: nil, debug: debug)
   end
 
+  def extract_image(response, output_path:, debug: false)
+    status = response.code.to_i
+    parsed_response = JSON.parse(response.body)
+
+    unless success_status?(status)
+      return prettify_data(
+        status: status,
+        error: error_message(parsed_response),
+        response_id: parsed_response["id"],
+        raw: parsed_response,
+        debug: debug
+      )
+    end
+
+    content = image_content(parsed_response)
+    write_image_output(output_path, content) if output_path
+
+    prettify_data(
+      status: status,
+      content: content,
+      response_id: parsed_response["id"],
+      raw: parsed_response,
+      debug: debug
+    )
+  rescue JSON::ParserError => e
+    prettify_data(status: response_status(response), error: e.message, raw: response&.body, debug: debug)
+  rescue => e
+    prettify_data(status: response_status(response), error: e.message, raw: nil, debug: debug)
+  end
+
   def extract_output_text(raw)
     Array(raw["output"]).flat_map do |item|
       next [] unless item.is_a?(Hash) && item["type"] == "message"
@@ -310,6 +366,17 @@ class AiLite
     end.compact
 
     multiple ? embeddings : embeddings.first
+  end
+
+  def image_content(raw)
+    image = Array(raw["data"]).find { |item| item.is_a?(Hash) && item["b64_json"] }
+    image && image["b64_json"]
+  end
+
+  def write_image_output(path, content)
+    raise "No image data returned" if content.to_s.empty?
+
+    File.binwrite(path, Base64.decode64(content))
   end
 
   def success_status?(status)

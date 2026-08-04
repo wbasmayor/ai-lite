@@ -19,6 +19,7 @@ It is not meant to replace the official OpenAI SDK. It is a small wrapper for pr
 ai.chat("Say hello")
 ai.moderate("User submitted text")
 ai.embed("Text to vectorize")
+ai.image("A simple app icon")
 ```
 
 ## Usage
@@ -51,6 +52,7 @@ AiLite.configure do |config|
   config.model = "gpt-5.5"
   config.moderation_model = "omni-moderation-latest"
   config.embedding_model = "text-embedding-3-small"
+  config.image_model = "gpt-image-2"
   config.timeout = 120
   config.max_output_tokens = 2000
 end
@@ -237,6 +239,69 @@ result = ai.embed("Hello", debug: true)
 
 result["content"]       # embedding vector
 result["raw"]["usage"]  # token usage
+```
+
+## Images
+
+Use `image` to generate an image from a prompt.
+
+```ruby
+result = ai.image("A clean Ruby gem logo on a white background")
+image_data = result["content"]
+```
+
+By default, `content` is the base64-encoded generated image:
+
+```ruby
+{
+  "content" => "iVBORw0KGgo...",
+  "response_id" => nil,
+  "status" => 200,
+  "error" => nil,
+  "raw" => nil
+}
+```
+
+Write the generated image bytes directly to a file with `output_path`:
+
+```ruby
+result = ai.image(
+  "A clean Ruby gem logo on a white background",
+  output_path: "tmp/logo.png"
+)
+```
+
+`image` sends a `POST` request to `/v1/images/generations` with:
+
+- `model`
+- `prompt`
+- optional `size`
+- optional `quality`
+- optional `background`
+- optional `output_format`
+- optional `debug`
+- optional extra `options`
+
+The default image model is `gpt-image-2`.
+
+Use `output_format` to request `png`, `webp`, or `jpeg` output:
+
+```ruby
+result = ai.image(
+  "A transparent app icon",
+  background: "transparent",
+  output_format: "webp",
+  output_path: "tmp/icon.webp"
+)
+```
+
+Pass `debug: true` to include the raw OpenAI response, including usage when returned:
+
+```ruby
+result = ai.image("A tiny robot sticker", debug: true)
+
+result["content"]       # base64 image data
+result["raw"]["usage"]  # token usage, when returned
 ```
 
 ## Multi-Turn Chat
