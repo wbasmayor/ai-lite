@@ -34,6 +34,8 @@ class AiLiteTest < Minitest::Test
         api_key: "explicit-key",
         model: "gpt-test",
         image_model: "gpt-image-test",
+        speech_model: "gpt-speech-test",
+        speech_voice: "verse",
         timeout: 10
       )
 
@@ -42,6 +44,8 @@ class AiLiteTest < Minitest::Test
       assert_equal "omni-moderation-latest", client.moderation_model
       assert_equal "text-embedding-3-small", client.embedding_model
       assert_equal "gpt-image-test", client.image_model
+      assert_equal "gpt-speech-test", client.speech_model
+      assert_equal "verse", client.speech_voice
       assert_equal 10, client.timeout
       assert_equal 2000, client.max_output_tokens
       assert_equal "Bearer explicit-key", client.headers["Authorization"]
@@ -57,6 +61,8 @@ class AiLiteTest < Minitest::Test
         config.moderation_model = "omni-moderation-test"
         config.embedding_model = "text-embedding-test"
         config.image_model = "gpt-image-test"
+        config.speech_model = "gpt-speech-test"
+        config.speech_voice = "verse"
         config.timeout = 15
         config.max_output_tokens = 750
       end
@@ -68,6 +74,8 @@ class AiLiteTest < Minitest::Test
       assert_equal "omni-moderation-test", client.moderation_model
       assert_equal "text-embedding-test", client.embedding_model
       assert_equal "gpt-image-test", client.image_model
+      assert_equal "gpt-speech-test", client.speech_model
+      assert_equal "verse", client.speech_voice
       assert_equal 15, client.timeout
       assert_equal 750, client.max_output_tokens
       assert_same client, AiLite.client
@@ -92,6 +100,8 @@ class AiLiteTest < Minitest::Test
       config.moderation_model = "omni-moderation-config"
       config.embedding_model = "text-embedding-config"
       config.image_model = "gpt-image-config"
+      config.speech_model = "gpt-speech-config"
+      config.speech_voice = "sage"
       config.timeout = 15
       config.max_output_tokens = 750
     end
@@ -102,6 +112,8 @@ class AiLiteTest < Minitest::Test
       moderation_model: "omni-moderation-explicit",
       embedding_model: "text-embedding-explicit",
       image_model: "gpt-image-explicit",
+      speech_model: "gpt-speech-explicit",
+      speech_voice: "coral",
       timeout: 5,
       max_output_tokens: 300
     )
@@ -111,6 +123,8 @@ class AiLiteTest < Minitest::Test
     assert_equal "omni-moderation-explicit", client.moderation_model
     assert_equal "text-embedding-explicit", client.embedding_model
     assert_equal "gpt-image-explicit", client.image_model
+    assert_equal "gpt-speech-explicit", client.speech_model
+    assert_equal "coral", client.speech_voice
     assert_equal 5, client.timeout
     assert_equal 300, client.max_output_tokens
   end
@@ -644,6 +658,133 @@ class AiLiteTest < Minitest::Test
     end
   end
 
+  def test_speak_sends_post_to_audio_speech_with_default_payload
+    client = AiLite.new(api_key: "token-abc")
+
+    with_stubbed_http(speech_response("fake audio")) do |captured, _response|
+      result = client.speak("Read this aloud")
+      request = captured[:http].last_request
+      payload = JSON.parse(request.body)
+
+      assert_equal "fake audio", result["content"]
+      assert_nil result["response_id"]
+      assert_equal 200, result["status"]
+      assert_nil result["error"]
+      assert_nil result["raw"]
+      assert_equal "api.openai.com", captured[:host]
+      assert_equal 443, captured[:port]
+      assert_equal true, captured[:use_ssl]
+      assert_instance_of Net::HTTP::Post, request
+      assert_equal "/v1/audio/speech", request.path
+      assert_equal "Bearer token-abc", request["Authorization"]
+      assert_equal "application/json", request["Content-Type"]
+      assert_equal "gpt-4o-mini-tts", payload["model"]
+      assert_equal "Read this aloud", payload["input"]
+      assert_equal "alloy", payload["voice"]
+    end
+  end
+
+  def test_speak_includes_options_response_format_speed_instructions_model_and_voice
+    client = AiLite.new(api_key: "token-abc")
+
+    with_stubbed_http(speech_response) do |captured, _response|
+      client.speak(
+        "Use a clear support tone",
+        model: "gpt-speech-test",
+        voice: "sage",
+        response_format: "wav",
+        speed: 1.2,
+        instructions: "Speak warmly.",
+        options: {
+          stream_format: "audio"
+        }
+      )
+      payload = JSON.parse(captured[:http].last_request.body)
+
+      assert_equal "gpt-speech-test", payload["model"]
+      assert_equal "Use a clear support tone", payload["input"]
+      assert_equal "sage", payload["voice"]
+      assert_equal "wav", payload["response_format"]
+      assert_equal 1.2, payload["speed"]
+      assert_equal "Speak warmly.", payload["instructions"]
+      assert_equal "audio", payload["stream_format"]
+    end
+  end
+
+  def test_speak_uses_class_level_configured_client
+    AiLite.configure do |config|
+      config.api_key = "configured-key"
+      config.speech_model = "gpt-speech-config"
+      config.speech_voice = "marin"
+    end
+
+    with_stubbed_http(speech_response) do |captured, _response|
+      AiLite.speak("Use configured defaults")
+      payload = JSON.parse(captured[:http].last_request.body)
+
+      assert_equal "gpt-speech-config", payload["model"]
+      assert_equal "marin", payload["voice"]
+      assert_equal "Bearer configured-key", captured[:http].last_request["Authorization"]
+    end
+  end
+
+  def test_speak_writes_audio_to_output_path_and_returns_metadata
+    client = AiLite.new(api_key: "token-abc")
+
+    Tempfile.create(["speech", ".mp3"]) do |file|
+      with_stubbed_http(speech_response("fake audio")) do |_captured, _response|
+        result = client.speak("Save this", output_path: file.path)
+
+        assert_equal(
+          {
+            "path" => file.path,
+            "bytes" => 10,
+            "format" => "mp3"
+          },
+          result["content"]
+        )
+        assert_equal "fake audio", File.binread(file.path)
+      end
+    end
+  end
+
+  def test_speak_base64_true_returns_encoded_audio
+    client = AiLite.new(api_key: "token-abc")
+
+    with_stubbed_http(speech_response("fake audio")) do |_captured, _response|
+      result = client.speak("Encode this", base64: true)
+
+      assert_equal Base64.strict_encode64("fake audio"), result["content"]
+      assert_nil result["raw"]
+    end
+  end
+
+  def test_speak_debug_true_returns_raw_audio
+    client = AiLite.new(api_key: "token-abc")
+
+    with_stubbed_http(speech_response("fake audio")) do |_captured, _response|
+      result = client.speak("Debug this", debug: true)
+
+      assert_equal "fake audio", result["content"]
+      assert_equal "fake audio", result["raw"]
+    end
+  end
+
+  def test_speak_http_errors_return_standard_envelope
+    client = AiLite.new(api_key: "token-abc")
+    body = JSON.generate("error" => { "message" => "Unsupported voice" })
+
+    with_stubbed_http(FakeResponse.new("400", body)) do |_captured, _response|
+      result = client.speak("Say hello")
+
+      assert_nil result["content"]
+      assert_nil result["response_id"]
+      assert_equal 400, result["status"]
+      assert_equal "Unsupported voice", result["error"]
+      assert_nil result["raw"]
+    end
+  end
+
   def test_http_errors_return_standard_envelope
     client = AiLite.new(api_key: "token-abc")
     body = JSON.generate("error" => { "message" => "Invalid API key" })
@@ -796,6 +937,10 @@ class AiLiteTest < Minitest::Test
       }
     )
     FakeResponse.new("200", body)
+  end
+
+  def speech_response(audio = "fake audio")
+    FakeResponse.new("200", audio)
   end
 
   def with_env(values)

@@ -20,6 +20,7 @@ ai.chat("Say hello")
 ai.moderate("User submitted text")
 ai.embed("Text to vectorize")
 ai.image("A simple app icon")
+ai.speak("Read this aloud")
 ```
 
 ## Usage
@@ -53,6 +54,8 @@ AiLite.configure do |config|
   config.moderation_model = "omni-moderation-latest"
   config.embedding_model = "text-embedding-3-small"
   config.image_model = "gpt-image-2"
+  config.speech_model = "gpt-4o-mini-tts"
+  config.speech_voice = "alloy"
   config.timeout = 120
   config.max_output_tokens = 2000
 end
@@ -96,6 +99,23 @@ result = ai.chat(
 The default model is `gpt-5.5`.
 
 The OpenAI API URL is fixed to `https://api.openai.com/v1/responses`.
+
+### Multi-Turn Chat
+
+Responses include a `response_id` that can be passed back through `options` as `previous_response_id`:
+
+```ruby
+first = ai.chat("Tell me a short joke.")
+
+follow_up = ai.chat(
+  "Explain why that is funny.",
+  options: {
+    previous_response_id: first["response_id"]
+  }
+)
+
+puts follow_up["content"]
+```
 
 ## Moderation
 
@@ -304,21 +324,93 @@ result["content"]       # base64 image data
 result["raw"]["usage"]  # token usage, when returned
 ```
 
-## Multi-Turn Chat
+## Speech
 
-Responses include a `response_id` that can be passed back through `options` as `previous_response_id`:
+Use `speak` to generate audio from text.
 
 ```ruby
-first = ai.chat("Tell me a short joke.")
+result = ai.speak("Hello from AI Lite")
+audio_bytes = result["content"]
+```
 
-follow_up = ai.chat(
-  "Explain why that is funny.",
-  options: {
-    previous_response_id: first["response_id"]
-  }
+By default, `content` is the raw audio bytes returned by OpenAI:
+
+```ruby
+{
+  "content" => "...binary audio bytes...",
+  "response_id" => nil,
+  "status" => 200,
+  "error" => nil,
+  "raw" => nil
+}
+```
+
+Write the generated audio directly to a file with `output_path`:
+
+```ruby
+result = ai.speak(
+  "Hello from AI Lite",
+  output_path: "tmp/hello.mp3"
 )
+```
 
-puts follow_up["content"]
+When `output_path` is used, `content` is file metadata:
+
+```ruby
+{
+  "content" => {
+    "path" => "tmp/hello.mp3",
+    "bytes" => 12345,
+    "format" => "mp3"
+  },
+  "response_id" => nil,
+  "status" => 200,
+  "error" => nil,
+  "raw" => nil
+}
+```
+
+Use `base64: true` when you want text-safe audio data that can be transported in JSON and decoded later:
+
+```ruby
+result = ai.speak("Hello from AI Lite", base64: true)
+
+File.binwrite("tmp/hello.mp3", Base64.decode64(result["content"]))
+```
+
+`speak` sends a `POST` request to `/v1/audio/speech` with:
+
+- `model`
+- `input`
+- `voice`
+- optional `response_format`
+- optional `speed`
+- optional `instructions`
+- optional `debug`
+- optional extra `options`
+
+The default speech model is `gpt-4o-mini-tts`.
+The default speech voice is `alloy`.
+The default response format is `mp3`.
+
+Set `voice` per call when you want a different built-in voice:
+
+```ruby
+result = ai.speak(
+  "Hello from AI Lite",
+  voice: "sage",
+  output_path: "tmp/hello.mp3"
+)
+```
+
+Use `response_format` to request `mp3`, `opus`, `aac`, `flac`, `wav`, or `pcm` output:
+
+```ruby
+result = ai.speak(
+  "Export this as a WAV file",
+  response_format: "wav",
+  output_path: "tmp/hello.wav"
+)
 ```
 
 ## Return Shape

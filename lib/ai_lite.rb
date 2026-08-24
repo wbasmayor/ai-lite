@@ -10,6 +10,9 @@ class AiLite
   DEFAULT_MODERATION_MODEL = "omni-moderation-latest".freeze
   DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small".freeze
   DEFAULT_IMAGE_MODEL = "gpt-image-2".freeze
+  DEFAULT_SPEECH_MODEL = "gpt-4o-mini-tts".freeze
+  DEFAULT_SPEECH_VOICE = "alloy".freeze
+  DEFAULT_SPEECH_FORMAT = "mp3".freeze
   DEFAULT_TIMEOUT = 120
   DEFAULT_MAX_OUTPUT_TOKENS = 2000
   IMAGE_MIME_TYPES = {
@@ -21,7 +24,7 @@ class AiLite
   }.freeze
 
   class Configuration
-    attr_accessor :api_key, :model, :moderation_model, :embedding_model, :image_model, :timeout, :max_output_tokens
+    attr_accessor :api_key, :model, :moderation_model, :embedding_model, :image_model, :speech_model, :speech_voice, :timeout, :max_output_tokens
 
     def initialize
       @api_key = nil
@@ -29,6 +32,8 @@ class AiLite
       @moderation_model = DEFAULT_MODERATION_MODEL
       @embedding_model = DEFAULT_EMBEDDING_MODEL
       @image_model = DEFAULT_IMAGE_MODEL
+      @speech_model = DEFAULT_SPEECH_MODEL
+      @speech_voice = DEFAULT_SPEECH_VOICE
       @timeout = DEFAULT_TIMEOUT
       @max_output_tokens = DEFAULT_MAX_OUTPUT_TOKENS
     end
@@ -71,14 +76,18 @@ class AiLite
       client.image(prompt, **kwargs)
     end
 
+    def speak(text, **kwargs)
+      client.speak(text, **kwargs)
+    end
+
     def reset_client!
       @client = nil
     end
   end
 
-  attr_reader :api_key, :model, :moderation_model, :embedding_model, :image_model, :timeout, :max_output_tokens, :headers
+  attr_reader :api_key, :model, :moderation_model, :embedding_model, :image_model, :speech_model, :speech_voice, :timeout, :max_output_tokens, :headers
 
-  def initialize(api_key: nil, model: nil, moderation_model: nil, embedding_model: nil, image_model: nil, timeout: nil, max_output_tokens: nil)
+  def initialize(api_key: nil, model: nil, moderation_model: nil, embedding_model: nil, image_model: nil, speech_model: nil, speech_voice: nil, timeout: nil, max_output_tokens: nil)
     @api_key = api_key || self.class.configuration.api_key || ENV["OPENAI_API_KEY"] || ENV["OPEN_AI_TOKEN"]
     raise ArgumentError, "Missing OpenAI API key" if @api_key.to_s.strip.empty?
 
@@ -86,6 +95,8 @@ class AiLite
     @moderation_model = moderation_model || self.class.configuration.moderation_model
     @embedding_model = embedding_model || self.class.configuration.embedding_model
     @image_model = image_model || self.class.configuration.image_model
+    @speech_model = speech_model || self.class.configuration.speech_model
+    @speech_voice = speech_voice || self.class.configuration.speech_voice
     @timeout = timeout || self.class.configuration.timeout
     @max_output_tokens = max_output_tokens || self.class.configuration.max_output_tokens
     @headers = {
@@ -146,6 +157,27 @@ class AiLite
     prettify_data(status: "unknown", error: e.message, raw: nil, debug: debug)
   end
 
+  def speak(text, model: nil, voice: nil, response_format: nil, speed: nil, instructions: nil, output_path: nil, base64: false, debug: false, options: {})
+    payload = options.merge(
+      model: model || speech_model,
+      input: text,
+      voice: voice || speech_voice
+    )
+    payload[:response_format] = response_format if response_format
+    payload[:speed] = speed if speed
+    payload[:instructions] = instructions if instructions
+
+    extract_speech(
+      post(payload, endpoint: speech_endpoint),
+      output_path: output_path,
+      base64: base64,
+      response_format: payload[:response_format] || payload["response_format"] || DEFAULT_SPEECH_FORMAT,
+      debug: debug
+    )
+  rescue => e
+    prettify_data(status: "unknown", error: e.message, raw: nil, debug: debug)
+  end
+
   private
 
   def post(payload, endpoint: response_endpoint)
@@ -179,6 +211,10 @@ class AiLite
 
   def image_endpoint
     "#{API_BASE_URL}/images/generations"
+  end
+
+  def speech_endpoint
+    "#{API_BASE_URL}/audio/speech"
   end
 
   def extract_content(response, debug: false)
@@ -294,6 +330,35 @@ class AiLite
     prettify_data(status: response_status(response), error: e.message, raw: nil, debug: debug)
   end
 
+  def extract_speech(response, output_path:, base64:, response_format:, debug: false)
+    status = response.code.to_i
+
+    unless success_status?(status)
+      parsed_response = parse_error_response(response.body)
+
+      return prettify_data(
+        status: status,
+        error: error_message(parsed_response),
+        response_id: parsed_response.is_a?(Hash) ? parsed_response["id"] : nil,
+        raw: parsed_response,
+        debug: debug
+      )
+    end
+
+    audio = response.body
+    File.binwrite(output_path, audio) if output_path
+
+    prettify_data(
+      status: status,
+      content: speech_content(audio, output_path: output_path, base64: base64, response_format: response_format),
+      response_id: nil,
+      raw: audio,
+      debug: debug
+    )
+  rescue => e
+    prettify_data(status: response_status(response), error: e.message, raw: nil, debug: debug)
+  end
+
   def extract_output_text(raw)
     Array(raw["output"]).flat_map do |item|
       next [] unless item.is_a?(Hash) && item["type"] == "message"
@@ -377,6 +442,23 @@ class AiLite
     raise "No image data returned" if content.to_s.empty?
 
     File.binwrite(path, Base64.decode64(content))
+  end
+
+  def speech_content(audio, output_path:, base64:, response_format:)
+    return Base64.strict_encode64(audio) if base64
+    return audio unless output_path
+
+    {
+      "path" => output_path,
+      "bytes" => audio.bytesize,
+      "format" => response_format
+    }
+  end
+
+  def parse_error_response(body)
+    JSON.parse(body)
+  rescue JSON::ParserError
+    body
   end
 
   def success_status?(status)
