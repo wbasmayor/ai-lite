@@ -1,6 +1,7 @@
 require "base64"
 require "json"
 require "net/http"
+require "securerandom"
 require "uri"
 require_relative "ai_lite/version"
 
@@ -13,6 +14,7 @@ class AiLite
   DEFAULT_SPEECH_MODEL = "gpt-4o-mini-tts".freeze
   DEFAULT_SPEECH_VOICE = "alloy".freeze
   DEFAULT_SPEECH_FORMAT = "mp3".freeze
+  DEFAULT_TRANSCRIPTION_MODEL = "gpt-transcribe".freeze
   DEFAULT_TIMEOUT = 120
   DEFAULT_MAX_OUTPUT_TOKENS = 2000
   IMAGE_MIME_TYPES = {
@@ -22,9 +24,20 @@ class AiLite
     ".png" => "image/png",
     ".webp" => "image/webp"
   }.freeze
+  AUDIO_MIME_TYPES = {
+    ".flac" => "audio/flac",
+    ".m4a" => "audio/mp4",
+    ".mp3" => "audio/mpeg",
+    ".mp4" => "audio/mp4",
+    ".mpeg" => "audio/mpeg",
+    ".mpga" => "audio/mpeg",
+    ".ogg" => "audio/ogg",
+    ".wav" => "audio/wav",
+    ".webm" => "audio/webm"
+  }.freeze
 
   class Configuration
-    attr_accessor :api_key, :model, :moderation_model, :embedding_model, :image_model, :speech_model, :speech_voice, :timeout, :max_output_tokens
+    attr_accessor :api_key, :model, :moderation_model, :embedding_model, :image_model, :speech_model, :speech_voice, :transcription_model, :timeout, :max_output_tokens
 
     def initialize
       @api_key = nil
@@ -34,6 +47,7 @@ class AiLite
       @image_model = DEFAULT_IMAGE_MODEL
       @speech_model = DEFAULT_SPEECH_MODEL
       @speech_voice = DEFAULT_SPEECH_VOICE
+      @transcription_model = DEFAULT_TRANSCRIPTION_MODEL
       @timeout = DEFAULT_TIMEOUT
       @max_output_tokens = DEFAULT_MAX_OUTPUT_TOKENS
     end
@@ -80,14 +94,18 @@ class AiLite
       client.speak(text, **kwargs)
     end
 
+    def transcribe(file_path, **kwargs)
+      client.transcribe(file_path, **kwargs)
+    end
+
     def reset_client!
       @client = nil
     end
   end
 
-  attr_reader :api_key, :model, :moderation_model, :embedding_model, :image_model, :speech_model, :speech_voice, :timeout, :max_output_tokens, :headers
+  attr_reader :api_key, :model, :moderation_model, :embedding_model, :image_model, :speech_model, :speech_voice, :transcription_model, :timeout, :max_output_tokens, :headers
 
-  def initialize(api_key: nil, model: nil, moderation_model: nil, embedding_model: nil, image_model: nil, speech_model: nil, speech_voice: nil, timeout: nil, max_output_tokens: nil)
+  def initialize(api_key: nil, model: nil, moderation_model: nil, embedding_model: nil, image_model: nil, speech_model: nil, speech_voice: nil, transcription_model: nil, timeout: nil, max_output_tokens: nil)
     @api_key = api_key || self.class.configuration.api_key || ENV["OPENAI_API_KEY"] || ENV["OPEN_AI_TOKEN"]
     raise ArgumentError, "Missing OpenAI API key" if @api_key.to_s.strip.empty?
 
@@ -97,6 +115,7 @@ class AiLite
     @image_model = image_model || self.class.configuration.image_model
     @speech_model = speech_model || self.class.configuration.speech_model
     @speech_voice = speech_voice || self.class.configuration.speech_voice
+    @transcription_model = transcription_model || self.class.configuration.transcription_model
     @timeout = timeout || self.class.configuration.timeout
     @max_output_tokens = max_output_tokens || self.class.configuration.max_output_tokens
     @headers = {
@@ -178,6 +197,24 @@ class AiLite
     prettify_data(status: "unknown", error: e.message, raw: nil, debug: debug)
   end
 
+  def transcribe(file_path, model: nil, language: nil, prompt: nil, response_format: nil, temperature: nil, timestamp_granularities: nil, debug: false, options: {})
+    fields = options.merge(
+      model: model || transcription_model
+    )
+    fields[:language] = language if language
+    fields[:prompt] = prompt if prompt
+    fields[:response_format] = response_format if response_format
+    fields[:temperature] = temperature unless temperature.nil?
+    fields[:timestamp_granularities] = timestamp_granularities if timestamp_granularities
+
+    extract_transcription(
+      post_multipart(fields, file_field: audio_file_field(file_path), endpoint: transcription_endpoint),
+      debug: debug
+    )
+  rescue => e
+    prettify_data(status: "unknown", error: e.message, raw: nil, debug: debug)
+  end
+
   private
 
   def post(payload, endpoint: response_endpoint)
@@ -189,6 +226,21 @@ class AiLite
     end
 
     request.body = JSON.generate(payload)
+
+    Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https") do |http|
+      http.open_timeout = timeout if http.respond_to?(:open_timeout=)
+      http.read_timeout = timeout if http.respond_to?(:read_timeout=)
+      http.request(request)
+    end
+  end
+
+  def post_multipart(fields, file_field:, endpoint:)
+    uri = URI.parse(endpoint)
+    boundary = "----AiLiteBoundary#{SecureRandom.hex(16)}"
+    request = Net::HTTP::Post.new(uri)
+    request["Authorization"] = headers["Authorization"]
+    request["Content-Type"] = "multipart/form-data; boundary=#{boundary}"
+    request.body = multipart_body(fields, file_field: file_field, boundary: boundary)
 
     Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https") do |http|
       http.open_timeout = timeout if http.respond_to?(:open_timeout=)
@@ -215,6 +267,10 @@ class AiLite
 
   def speech_endpoint
     "#{API_BASE_URL}/audio/speech"
+  end
+
+  def transcription_endpoint
+    "#{API_BASE_URL}/audio/transcriptions"
   end
 
   def extract_content(response, debug: false)
@@ -359,6 +415,31 @@ class AiLite
     prettify_data(status: response_status(response), error: e.message, raw: nil, debug: debug)
   end
 
+  def extract_transcription(response, debug: false)
+    status = response.code.to_i
+    parsed_response = parse_error_response(response.body)
+
+    unless success_status?(status)
+      return prettify_data(
+        status: status,
+        error: error_message(parsed_response),
+        response_id: parsed_response.is_a?(Hash) ? parsed_response["id"] : nil,
+        raw: parsed_response,
+        debug: debug
+      )
+    end
+
+    prettify_data(
+      status: status,
+      content: transcription_content(parsed_response),
+      response_id: parsed_response.is_a?(Hash) ? parsed_response["id"] : nil,
+      raw: parsed_response,
+      debug: debug
+    )
+  rescue => e
+    prettify_data(status: response_status(response), error: e.message, raw: nil, debug: debug)
+  end
+
   def extract_output_text(raw)
     Array(raw["output"]).flat_map do |item|
       next [] unless item.is_a?(Hash) && item["type"] == "message"
@@ -418,6 +499,24 @@ class AiLite
     end
   end
 
+  def audio_file_field(path)
+    raise ArgumentError, "Audio file not found: #{path}" unless File.file?(path)
+
+    {
+      name: "file",
+      path: path,
+      filename: File.basename(path),
+      content_type: audio_mime_type(path)
+    }
+  end
+
+  def audio_mime_type(path)
+    extension = File.extname(path).downcase
+    AUDIO_MIME_TYPES.fetch(extension) do
+      raise ArgumentError, "Unsupported audio type for transcription: #{extension}"
+    end
+  end
+
   def moderation_content(raw)
     results = raw["results"]
     return nil unless results.is_a?(Array)
@@ -453,6 +552,55 @@ class AiLite
       "bytes" => audio.bytesize,
       "format" => response_format
     }
+  end
+
+  def transcription_content(raw)
+    return raw["text"] if raw.is_a?(Hash) && raw.key?("text")
+
+    raw
+  end
+
+  def multipart_body(fields, file_field:, boundary:)
+    body = String.new(encoding: Encoding::BINARY)
+
+    fields.each do |name, value|
+      multipart_field_parts(name, value).each do |field_name, field_value|
+        body << "--#{boundary}\r\n".b
+        body << "Content-Disposition: form-data; name=\"#{multipart_quote(field_name)}\"\r\n\r\n".b
+        body << field_value.to_s.b
+        body << "\r\n".b
+      end
+    end
+
+    body << "--#{boundary}\r\n".b
+    body << "Content-Disposition: form-data; name=\"#{multipart_quote(file_field[:name])}\"; filename=\"#{multipart_quote(file_field[:filename])}\"\r\n".b
+    body << "Content-Type: #{file_field[:content_type]}\r\n\r\n".b
+    body << File.binread(file_field[:path])
+    body << "\r\n--#{boundary}--\r\n".b
+    body
+  end
+
+  def multipart_field_parts(name, value)
+    return [] if value.nil?
+
+    if value.is_a?(Array)
+      value.map { |item| ["#{name}[]", multipart_value(item)] }
+    else
+      [[name.to_s, multipart_value(value)]]
+    end
+  end
+
+  def multipart_value(value)
+    case value
+    when Hash
+      JSON.generate(value)
+    else
+      value
+    end
+  end
+
+  def multipart_quote(value)
+    value.to_s.gsub("\\", "\\\\").gsub("\"", "\\\"").delete("\r\n")
   end
 
   def parse_error_response(body)

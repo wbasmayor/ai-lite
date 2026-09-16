@@ -36,6 +36,7 @@ class AiLiteTest < Minitest::Test
         image_model: "gpt-image-test",
         speech_model: "gpt-speech-test",
         speech_voice: "verse",
+        transcription_model: "gpt-transcribe-test",
         timeout: 10
       )
 
@@ -46,6 +47,7 @@ class AiLiteTest < Minitest::Test
       assert_equal "gpt-image-test", client.image_model
       assert_equal "gpt-speech-test", client.speech_model
       assert_equal "verse", client.speech_voice
+      assert_equal "gpt-transcribe-test", client.transcription_model
       assert_equal 10, client.timeout
       assert_equal 2000, client.max_output_tokens
       assert_equal "Bearer explicit-key", client.headers["Authorization"]
@@ -63,6 +65,7 @@ class AiLiteTest < Minitest::Test
         config.image_model = "gpt-image-test"
         config.speech_model = "gpt-speech-test"
         config.speech_voice = "verse"
+        config.transcription_model = "gpt-transcribe-test"
         config.timeout = 15
         config.max_output_tokens = 750
       end
@@ -76,6 +79,7 @@ class AiLiteTest < Minitest::Test
       assert_equal "gpt-image-test", client.image_model
       assert_equal "gpt-speech-test", client.speech_model
       assert_equal "verse", client.speech_voice
+      assert_equal "gpt-transcribe-test", client.transcription_model
       assert_equal 15, client.timeout
       assert_equal 750, client.max_output_tokens
       assert_same client, AiLite.client
@@ -102,6 +106,7 @@ class AiLiteTest < Minitest::Test
       config.image_model = "gpt-image-config"
       config.speech_model = "gpt-speech-config"
       config.speech_voice = "sage"
+      config.transcription_model = "gpt-transcribe-config"
       config.timeout = 15
       config.max_output_tokens = 750
     end
@@ -114,6 +119,7 @@ class AiLiteTest < Minitest::Test
       image_model: "gpt-image-explicit",
       speech_model: "gpt-speech-explicit",
       speech_voice: "coral",
+      transcription_model: "gpt-transcribe-explicit",
       timeout: 5,
       max_output_tokens: 300
     )
@@ -125,6 +131,7 @@ class AiLiteTest < Minitest::Test
     assert_equal "gpt-image-explicit", client.image_model
     assert_equal "gpt-speech-explicit", client.speech_model
     assert_equal "coral", client.speech_voice
+    assert_equal "gpt-transcribe-explicit", client.transcription_model
     assert_equal 5, client.timeout
     assert_equal 300, client.max_output_tokens
   end
@@ -785,6 +792,171 @@ class AiLiteTest < Minitest::Test
     end
   end
 
+  def test_transcribe_sends_post_to_audio_transcriptions_with_default_multipart_payload
+    client = AiLite.new(api_key: "token-abc")
+
+    Tempfile.create(["meeting", ".mp3"]) do |file|
+      file.binmode
+      file.write("fake audio")
+      file.flush
+
+      with_stubbed_http(transcription_response("Hello from the file")) do |captured, _response|
+        result = client.transcribe(file.path)
+        request = captured[:http].last_request
+
+        assert_equal "Hello from the file", result["content"]
+        assert_nil result["response_id"]
+        assert_equal 200, result["status"]
+        assert_nil result["error"]
+        assert_nil result["raw"]
+        assert_equal "api.openai.com", captured[:host]
+        assert_equal 443, captured[:port]
+        assert_equal true, captured[:use_ssl]
+        assert_instance_of Net::HTTP::Post, request
+        assert_equal "/v1/audio/transcriptions", request.path
+        assert_equal "Bearer token-abc", request["Authorization"]
+        assert_match(/\Amultipart\/form-data; boundary=----AiLiteBoundary/, request["Content-Type"])
+        assert_multipart_field request.body, "model", "gpt-transcribe"
+        assert_multipart_file request.body, "file", File.basename(file.path), "audio/mpeg", "fake audio"
+      end
+    end
+  end
+
+  def test_transcribe_includes_options_and_optional_fields
+    client = AiLite.new(api_key: "token-abc")
+
+    Tempfile.create(["meeting", ".wav"]) do |file|
+      file.binmode
+      file.write("fake wav")
+      file.flush
+
+      with_stubbed_http(transcription_response("Detailed transcript")) do |captured, _response|
+        client.transcribe(
+          file.path,
+          model: "gpt-4o-transcribe",
+          language: "en",
+          prompt: "The speaker may say AI Lite.",
+          response_format: "verbose_json",
+          temperature: 0,
+          timestamp_granularities: ["word", "segment"],
+          options: {
+            chunking_strategy: "auto",
+            include: ["logprobs"],
+            metadata: { source: "test" }
+          }
+        )
+        body = captured[:http].last_request.body
+
+        assert_multipart_field body, "model", "gpt-4o-transcribe"
+        assert_multipart_field body, "language", "en"
+        assert_multipart_field body, "prompt", "The speaker may say AI Lite."
+        assert_multipart_field body, "response_format", "verbose_json"
+        assert_multipart_field body, "temperature", "0"
+        assert_multipart_field body, "timestamp_granularities[]", "word"
+        assert_multipart_field body, "timestamp_granularities[]", "segment"
+        assert_multipart_field body, "chunking_strategy", "auto"
+        assert_multipart_field body, "include[]", "logprobs"
+        assert_multipart_field body, "metadata", JSON.generate("source" => "test")
+        assert_multipart_file body, "file", File.basename(file.path), "audio/wav", "fake wav"
+      end
+    end
+  end
+
+  def test_transcribe_uses_class_level_configured_client
+    AiLite.configure do |config|
+      config.api_key = "configured-key"
+      config.transcription_model = "gpt-transcription-config"
+    end
+
+    Tempfile.create(["meeting", ".m4a"]) do |file|
+      file.binmode
+      file.write("fake m4a")
+      file.flush
+
+      with_stubbed_http(transcription_response) do |captured, _response|
+        AiLite.transcribe(file.path)
+        request = captured[:http].last_request
+
+        assert_multipart_field request.body, "model", "gpt-transcription-config"
+        assert_equal "Bearer configured-key", request["Authorization"]
+      end
+    end
+  end
+
+  def test_transcribe_returns_plain_text_response_formats
+    client = AiLite.new(api_key: "token-abc")
+
+    Tempfile.create(["meeting", ".webm"]) do |file|
+      file.binmode
+      file.write("fake webm")
+      file.flush
+
+      with_stubbed_http(FakeResponse.new("200", "plain transcript")) do |_captured, _response|
+        result = client.transcribe(file.path, response_format: "text")
+
+        assert_equal "plain transcript", result["content"]
+        assert_equal 200, result["status"]
+        assert_nil result["error"]
+        assert_nil result["raw"]
+      end
+    end
+  end
+
+  def test_transcribe_debug_true_returns_raw_response
+    client = AiLite.new(api_key: "token-abc")
+
+    Tempfile.create(["meeting", ".ogg"]) do |file|
+      file.binmode
+      file.write("fake ogg")
+      file.flush
+
+      with_stubbed_http(transcription_response("Debug transcript", usage: { "input_tokens" => 4 })) do |_captured, _response|
+        result = client.transcribe(file.path, debug: true)
+
+        assert_equal "Debug transcript", result["content"]
+        assert_equal({ "input_tokens" => 4 }, result["raw"]["usage"])
+      end
+    end
+  end
+
+  def test_transcribe_http_errors_return_standard_envelope
+    client = AiLite.new(api_key: "token-abc")
+    body = JSON.generate("error" => { "message" => "Unsupported audio format" })
+
+    Tempfile.create(["meeting", ".mp3"]) do |file|
+      file.binmode
+      file.write("fake audio")
+      file.flush
+
+      with_stubbed_http(FakeResponse.new("400", body)) do |_captured, _response|
+        result = client.transcribe(file.path)
+
+        assert_nil result["content"]
+        assert_nil result["response_id"]
+        assert_equal 400, result["status"]
+        assert_equal "Unsupported audio format", result["error"]
+        assert_nil result["raw"]
+      end
+    end
+  end
+
+  def test_transcribe_local_file_errors_return_standard_envelope
+    client = AiLite.new(api_key: "token-abc")
+
+    missing_result = client.transcribe("tmp/missing-audio.mp3")
+    assert_nil missing_result["content"]
+    assert_equal "unknown", missing_result["status"]
+    assert_equal "Audio file not found: tmp/missing-audio.mp3", missing_result["error"]
+
+    Tempfile.create(["meeting", ".txt"]) do |file|
+      result = client.transcribe(file.path)
+
+      assert_nil result["content"]
+      assert_equal "unknown", result["status"]
+      assert_equal "Unsupported audio type for transcription: .txt", result["error"]
+    end
+  end
+
   def test_http_errors_return_standard_envelope
     client = AiLite.new(api_key: "token-abc")
     body = JSON.generate("error" => { "message" => "Invalid API key" })
@@ -941,6 +1113,21 @@ class AiLiteTest < Minitest::Test
 
   def speech_response(audio = "fake audio")
     FakeResponse.new("200", audio)
+  end
+
+  def transcription_response(text = "Transcribed text", **extra)
+    FakeResponse.new("200", JSON.generate({ "text" => text }.merge(extra)))
+  end
+
+  def assert_multipart_field(body, name, value)
+    assert_includes body, "Content-Disposition: form-data; name=\"#{name}\""
+    assert_includes body, "\r\n\r\n#{value}\r\n"
+  end
+
+  def assert_multipart_file(body, name, filename, content_type, content)
+    assert_includes body, "Content-Disposition: form-data; name=\"#{name}\"; filename=\"#{filename}\""
+    assert_includes body, "Content-Type: #{content_type}"
+    assert_includes body, "\r\n\r\n#{content}\r\n"
   end
 
   def with_env(values)

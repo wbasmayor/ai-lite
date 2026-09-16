@@ -11,7 +11,7 @@ This gem is intentionally small:
 - No Rails dependency
 - No official OpenAI gem dependency
 - No Faraday, HTTParty, ActiveSupport, or connection pool dependency
-- Uses only Ruby stdlib: `Net::HTTP`, `URI`, `JSON`, and `Base64`
+- Uses only Ruby stdlib: `Net::HTTP`, `URI`, `JSON`, `Base64`, and `SecureRandom`
 
 It is not meant to replace the official OpenAI SDK. It is a small wrapper for projects that only need a few clean interfaces:
 
@@ -21,6 +21,7 @@ ai.moderate("User submitted text")
 ai.embed("Text to vectorize")
 ai.image("A simple app icon")
 ai.speak("Read this aloud")
+ai.transcribe("tmp/meeting.mp3")
 ```
 
 ## Usage
@@ -56,10 +57,25 @@ AiLite.configure do |config|
   config.image_model = "gpt-image-2"
   config.speech_model = "gpt-4o-mini-tts"
   config.speech_voice = "alloy"
+  config.transcription_model = "gpt-transcribe"
   config.timeout = 120
   config.max_output_tokens = 2000
 end
 ```
+
+Any value left unset falls back to AI Lite's default:
+
+- `model`: `gpt-5.5`
+- `moderation_model`: `omni-moderation-latest`
+- `embedding_model`: `text-embedding-3-small`
+- `image_model`: `gpt-image-2`
+- `speech_model`: `gpt-4o-mini-tts`
+- `speech_voice`: `alloy`
+- `transcription_model`: `gpt-transcribe`
+- `timeout`: `120`
+- `max_output_tokens`: `2000`
+
+`timeout` is applied to both the HTTP connection timeout and the HTTP read timeout.
 
 Then use the configured singleton-style client:
 
@@ -411,6 +427,71 @@ result = ai.speak(
   response_format: "wav",
   output_path: "tmp/hello.wav"
 )
+```
+
+## Transcription
+
+Use `transcribe` to turn an audio file into text.
+
+```ruby
+result = ai.transcribe("tmp/meeting.mp3")
+
+puts result["content"]
+```
+
+By default, `content` is the transcript text:
+
+```ruby
+{
+  "content" => "Welcome everyone, let's get started.",
+  "response_id" => nil,
+  "status" => 200,
+  "error" => nil,
+  "raw" => nil
+}
+```
+
+`transcribe` sends a multipart `POST` request to `/v1/audio/transcriptions` with:
+
+- `file`
+- `model`
+- optional `language`
+- optional `prompt`
+- optional `response_format`
+- optional `temperature`
+- optional `timestamp_granularities`
+- optional `debug`
+- optional extra `options`
+
+The default transcription model is `gpt-transcribe`.
+
+Supported local audio extensions are `.flac`, `.m4a`, `.mp3`, `.mp4`, `.mpeg`, `.mpga`, `.ogg`, `.wav`, and `.webm`.
+
+Pass `language` in ISO-639-1 format when you know the input language:
+
+```ruby
+result = ai.transcribe(
+  "tmp/meeting.mp3",
+  language: "en"
+)
+```
+
+Use `prompt` to provide words, names, or style context that may help the transcription:
+
+```ruby
+result = ai.transcribe(
+  "tmp/support-call.mp3",
+  prompt: "The speakers may mention AI Lite, RubyGems, and Net::HTTP."
+)
+```
+
+Pass `debug: true` to include the raw OpenAI response:
+
+```ruby
+result = ai.transcribe("tmp/meeting.mp3", debug: true)
+
+result["content"]  # transcript text
+result["raw"]      # full response body when available
 ```
 
 ## Return Shape
