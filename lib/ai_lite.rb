@@ -124,13 +124,14 @@ class AiLite
     }
   end
 
-  def chat(message, model: nil, instructions: nil, max_output_tokens: nil, debug: false, options: {})
+  def chat(message, model: nil, instructions: nil, previous_response_id: nil, max_output_tokens: nil, debug: false, options: {})
     payload = options.merge(
       model: model || self.model,
       input: message,
       max_output_tokens: max_output_tokens || self.max_output_tokens
     )
     payload[:instructions] = instructions if instructions
+    payload[:previous_response_id] = previous_response_id if previous_response_id
 
     extract_content(post(payload), debug: debug)
   rescue => e

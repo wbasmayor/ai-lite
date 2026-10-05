@@ -109,6 +109,7 @@ result = ai.chat(
 - `input`
 - `max_output_tokens`
 - optional `instructions`
+- optional `previous_response_id`
 - optional `debug`
 - optional extra `options`
 
@@ -116,22 +117,35 @@ The default model is `gpt-5.5`.
 
 The OpenAI API URL is fixed to `https://api.openai.com/v1/responses`.
 
+### Message-Array Input
+
+For a conversation with multiple input messages, pass an array using the OpenAI Responses API message shape:
+
+```ruby
+result = ai.chat([
+  { role: "developer", content: "Be concise." },
+  { role: "user", content: "Explain dependency injection." }
+])
+```
+
+AI Lite sends the array unchanged as `input`, so you can also use richer Responses API content items when needed.
+
 ### Multi-Turn Chat
 
-Responses include a `response_id` that can be passed back through `options` as `previous_response_id`:
+Responses include a `response_id`. Pass it to the next call as `previous_response_id` to continue the conversation:
 
 ```ruby
 first = ai.chat("Tell me a short joke.")
 
 follow_up = ai.chat(
   "Explain why that is funny.",
-  options: {
-    previous_response_id: first["response_id"]
-  }
+  previous_response_id: first["response_id"]
 )
 
 puts follow_up["content"]
 ```
+
+Passing `previous_response_id` through `options` remains supported for backward compatibility.
 
 ## Moderation
 

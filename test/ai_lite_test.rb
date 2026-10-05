@@ -238,21 +238,66 @@ class AiLiteTest < Minitest::Test
     end
   end
 
-  def test_chat_supports_previous_response_id_through_options
+  def test_chat_supports_previous_response_id
     client = AiLite.new(api_key: "token-abc")
 
     with_stubbed_http(success_response("Follow-up")) do |captured, _response|
       result = client.chat(
         "Explain why that is funny",
-        options: {
-          previous_response_id: "resp_previous_123"
-        }
+        previous_response_id: "resp_previous_123"
       )
       payload = JSON.parse(captured[:http].last_request.body)
 
       assert_equal "resp_previous_123", payload["previous_response_id"]
       assert_equal "Follow-up", result["content"]
       assert_equal "resp_test_123", result["response_id"]
+    end
+  end
+
+  def test_chat_supports_message_array_input
+    client = AiLite.new(api_key: "token-abc")
+    messages = [
+      { role: "developer", content: "Be concise." },
+      { role: "user", content: "Say hello." }
+    ]
+
+    with_stubbed_http(success_response("Hello!")) do |captured, _response|
+      client.chat(messages)
+      payload = JSON.parse(captured[:http].last_request.body)
+
+      assert_equal(
+        [
+          { "role" => "developer", "content" => "Be concise." },
+          { "role" => "user", "content" => "Say hello." }
+        ],
+        payload["input"]
+      )
+    end
+  end
+
+  def test_chat_first_class_previous_response_id_overrides_options
+    client = AiLite.new(api_key: "token-abc")
+
+    with_stubbed_http(success_response("Follow-up")) do |captured, _response|
+      client.chat(
+        "Continue",
+        previous_response_id: "resp_keyword",
+        options: { previous_response_id: "resp_options" }
+      )
+      payload = JSON.parse(captured[:http].last_request.body)
+
+      assert_equal "resp_keyword", payload["previous_response_id"]
+    end
+  end
+
+  def test_chat_keeps_supporting_previous_response_id_through_options
+    client = AiLite.new(api_key: "token-abc")
+
+    with_stubbed_http(success_response("Follow-up")) do |captured, _response|
+      client.chat("Continue", options: { previous_response_id: "resp_options" })
+      payload = JSON.parse(captured[:http].last_request.body)
+
+      assert_equal "resp_options", payload["previous_response_id"]
     end
   end
 
