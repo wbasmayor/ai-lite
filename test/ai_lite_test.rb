@@ -20,8 +20,27 @@ class AiLiteTest < Minitest::Test
     end
   end
 
+  def provider
+    AiLite::OpenAI
+  end
+
   def setup
-    AiLite.reset_configuration!
+    provider.reset_configuration!
+  end
+
+  def test_http_200_failed_or_incomplete_generation_is_not_success
+    client = provider.new(api_key: "test-key")
+    %w[failed cancelled incomplete].each do |state|
+      body = JSON.generate("id" => "resp_partial", "status" => state,
+        "incomplete_details" => { "reason" => "max_output_tokens" }, "output" => [])
+      with_stubbed_http(FakeResponse.new("200", body)) do
+        result = client.chat("Hi", debug: true)
+        assert_equal 200, result["status"]
+        assert_includes result["error"], state
+        assert_equal "resp_partial", result["response_id"]
+        refute_nil result["raw"]
+      end
+    end
   end
 
   def test_has_a_version_number
@@ -30,7 +49,7 @@ class AiLiteTest < Minitest::Test
 
   def test_stores_initializer_config_and_headers
     with_env("OPENAI_API_KEY" => nil, "OPEN_AI_TOKEN" => nil) do
-      client = AiLite.new(
+      client = provider.new(
         api_key: "explicit-key",
         model: "gpt-test",
         image_model: "gpt-image-test",
@@ -57,7 +76,7 @@ class AiLiteTest < Minitest::Test
 
   def test_configure_sets_defaults_for_client
     with_env("OPENAI_API_KEY" => nil, "OPEN_AI_TOKEN" => nil) do
-      AiLite.configure do |config|
+      provider.configure do |config|
         config.api_key = "configured-key"
         config.model = "gpt-config"
         config.moderation_model = "omni-moderation-test"
@@ -70,7 +89,7 @@ class AiLiteTest < Minitest::Test
         config.max_output_tokens = 750
       end
 
-      client = AiLite.client
+      client = provider.client
 
       assert_equal "configured-key", client.api_key
       assert_equal "gpt-config", client.model
@@ -82,23 +101,23 @@ class AiLiteTest < Minitest::Test
       assert_equal "gpt-transcribe-test", client.transcription_model
       assert_equal 15, client.timeout
       assert_equal 750, client.max_output_tokens
-      assert_same client, AiLite.client
+      assert_same client, provider.client
     end
   end
 
   def test_configure_resets_cached_client
-    AiLite.configure { |config| config.api_key = "first-key" }
-    first_client = AiLite.client
+    provider.configure { |config| config.api_key = "first-key" }
+    first_client = provider.client
 
-    AiLite.configure { |config| config.api_key = "second-key" }
-    second_client = AiLite.client
+    provider.configure { |config| config.api_key = "second-key" }
+    second_client = provider.client
 
     refute_same first_client, second_client
     assert_equal "second-key", second_client.api_key
   end
 
   def test_instance_arguments_override_configuration
-    AiLite.configure do |config|
+    provider.configure do |config|
       config.api_key = "configured-key"
       config.model = "gpt-config"
       config.moderation_model = "omni-moderation-config"
@@ -111,7 +130,7 @@ class AiLiteTest < Minitest::Test
       config.max_output_tokens = 750
     end
 
-    client = AiLite.new(
+    client = provider.new(
       api_key: "explicit-key",
       model: "gpt-explicit",
       moderation_model: "omni-moderation-explicit",
@@ -138,32 +157,32 @@ class AiLiteTest < Minitest::Test
 
   def test_api_key_fallback_order
     with_env("OPENAI_API_KEY" => "openai-key", "OPEN_AI_TOKEN" => "legacy-key") do
-      assert_equal "openai-key", AiLite.new.api_key
-      assert_equal "explicit-key", AiLite.new(api_key: "explicit-key").api_key
+      assert_equal "openai-key", provider.new.api_key
+      assert_equal "explicit-key", provider.new(api_key: "explicit-key").api_key
     end
 
     with_env("OPENAI_API_KEY" => nil, "OPEN_AI_TOKEN" => "legacy-key") do
-      assert_equal "legacy-key", AiLite.new.api_key
+      assert_equal "legacy-key", provider.new.api_key
     end
   end
 
   def test_configured_api_key_takes_precedence_over_env
-    AiLite.configure { |config| config.api_key = "configured-key" }
+    provider.configure { |config| config.api_key = "configured-key" }
 
     with_env("OPENAI_API_KEY" => "openai-key", "OPEN_AI_TOKEN" => "legacy-key") do
-      assert_equal "configured-key", AiLite.new.api_key
-      assert_equal "explicit-key", AiLite.new(api_key: "explicit-key").api_key
+      assert_equal "configured-key", provider.new.api_key
+      assert_equal "explicit-key", provider.new(api_key: "explicit-key").api_key
     end
   end
 
   def test_missing_api_key_raises
     with_env("OPENAI_API_KEY" => nil, "OPEN_AI_TOKEN" => nil) do
-      assert_raises(ArgumentError) { AiLite.new }
+      assert_raises(ArgumentError) { provider.new }
     end
   end
 
   def test_chat_sends_post_to_responses_with_default_payload
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(success_response("Hello!")) do |captured, _response|
       result = client.chat("Say hello")
@@ -189,7 +208,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_chat_allows_overriding_max_output_tokens
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(success_response("Short")) do |captured, _response|
       client.chat("Summarize", max_output_tokens: 500)
@@ -200,13 +219,13 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_chat_uses_configured_max_output_tokens
-    AiLite.configure do |config|
+    provider.configure do |config|
       config.api_key = "configured-key"
       config.max_output_tokens = 750
     end
 
     with_stubbed_http(success_response("Configured")) do |captured, _response|
-      AiLite.chat("Use configured defaults")
+      provider.chat("Use configured defaults")
       payload = JSON.parse(captured[:http].last_request.body)
 
       assert_equal 750, payload["max_output_tokens"]
@@ -215,7 +234,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_chat_includes_instructions_model_and_options
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(success_response("Aye")) do |captured, _response|
       client.chat(
@@ -239,7 +258,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_chat_supports_previous_response_id
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(success_response("Follow-up")) do |captured, _response|
       result = client.chat(
@@ -255,7 +274,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_chat_supports_message_array_input
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
     messages = [
       { role: "developer", content: "Be concise." },
       { role: "user", content: "Say hello." }
@@ -276,7 +295,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_chat_first_class_previous_response_id_overrides_options
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(success_response("Follow-up")) do |captured, _response|
       client.chat(
@@ -291,7 +310,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_chat_keeps_supporting_previous_response_id_through_options
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(success_response("Follow-up")) do |captured, _response|
       client.chat("Continue", options: { previous_response_id: "resp_options" })
@@ -302,7 +321,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_extracts_text_from_nested_output_text_items
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
     body = JSON.generate(
       "id" => "resp_nested_123",
       "output" => [
@@ -328,7 +347,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_parses_json_looking_output_with_string_keys
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(success_response(JSON.generate("valid" => true))) do |_captured, _response|
       result = client.chat("Validate")
@@ -341,7 +360,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_debug_true_returns_raw_success_response
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(success_response("Hello!")) do |_captured, _response|
       result = client.chat("Say hello", debug: true)
@@ -364,7 +383,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_moderate_sends_post_to_moderations_with_default_payload
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(moderation_response) do |captured, _response|
       result = client.moderate("Some user submitted text")
@@ -389,13 +408,13 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_moderate_uses_class_level_configured_client
-    AiLite.configure do |config|
+    provider.configure do |config|
       config.api_key = "configured-key"
       config.moderation_model = "omni-moderation-config"
     end
 
     with_stubbed_http(moderation_response) do |captured, _response|
-      AiLite.moderate("Use configured defaults")
+      provider.moderate("Use configured defaults")
       payload = JSON.parse(captured[:http].last_request.body)
 
       assert_equal "omni-moderation-config", payload["model"]
@@ -404,7 +423,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_moderate_accepts_text_and_image_url_keywords
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(moderation_response) do |captured, _response|
       client.moderate(
@@ -427,7 +446,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_moderate_accepts_raw_openai_input_shape
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
     input = [
       { type: "text", text: "Caption" },
       {
@@ -456,7 +475,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_moderate_reads_image_path_as_data_url
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     Tempfile.create(["moderation", ".png"]) do |file|
       file.binmode
@@ -481,7 +500,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_moderate_returns_all_results_for_multiple_inputs
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
     safe_result = moderation_result(flagged: false)
     flagged_result = moderation_result(flagged: true)
 
@@ -495,7 +514,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_moderate_local_input_errors_return_standard_envelope
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     result = client.moderate
 
@@ -507,7 +526,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_embed_sends_post_to_embeddings_with_default_payload
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(embedding_response([[0.12, -0.34, 0.56]])) do |captured, _response|
       result = client.embed("Text to vectorize")
@@ -532,7 +551,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_embed_returns_vector_list_for_multiple_inputs
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
     embeddings = [
       [0.11, 0.22, 0.33],
       [0.44, 0.55, 0.66]
@@ -550,7 +569,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_embed_includes_options_dimensions_encoding_format_and_model
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(embedding_response([[0.12, -0.34]])) do |captured, _response|
       client.embed(
@@ -573,13 +592,13 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_embed_uses_class_level_configured_client
-    AiLite.configure do |config|
+    provider.configure do |config|
       config.api_key = "configured-key"
       config.embedding_model = "text-embedding-config"
     end
 
     with_stubbed_http(embedding_response([[0.12, -0.34, 0.56]])) do |captured, _response|
-      AiLite.embed("Use configured defaults")
+      provider.embed("Use configured defaults")
       payload = JSON.parse(captured[:http].last_request.body)
 
       assert_equal "text-embedding-config", payload["model"]
@@ -588,7 +607,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_embed_debug_true_returns_raw_usage
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(embedding_response([[0.12, -0.34, 0.56]])) do |_captured, _response|
       result = client.embed("Text to vectorize", debug: true)
@@ -599,7 +618,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_image_sends_post_to_images_with_default_payload
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
     image_data = Base64.strict_encode64("fake image")
 
     with_stubbed_http(image_response(b64_json: image_data)) do |captured, _response|
@@ -625,7 +644,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_image_includes_options_size_quality_background_output_format_and_model
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(image_response) do |captured, _response|
       client.image(
@@ -654,13 +673,13 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_image_uses_class_level_configured_client
-    AiLite.configure do |config|
+    provider.configure do |config|
       config.api_key = "configured-key"
       config.image_model = "gpt-image-config"
     end
 
     with_stubbed_http(image_response) do |captured, _response|
-      AiLite.image("Use configured defaults")
+      provider.image("Use configured defaults")
       payload = JSON.parse(captured[:http].last_request.body)
 
       assert_equal "gpt-image-config", payload["model"]
@@ -669,7 +688,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_image_writes_decoded_content_to_output_path
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
     image_data = Base64.strict_encode64("fake image")
 
     Tempfile.create(["generated", ".png"]) do |file|
@@ -683,7 +702,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_image_debug_true_returns_raw_usage
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
     image_data = Base64.strict_encode64("fake image")
 
     with_stubbed_http(image_response(b64_json: image_data)) do |_captured, _response|
@@ -695,7 +714,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_image_output_path_without_image_data_returns_standard_envelope
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     Tempfile.create(["generated", ".png"]) do |file|
       with_stubbed_http(image_response(b64_json: nil)) do |_captured, _response|
@@ -711,7 +730,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_speak_sends_post_to_audio_speech_with_default_payload
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(speech_response("fake audio")) do |captured, _response|
       result = client.speak("Read this aloud")
@@ -737,7 +756,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_speak_includes_options_response_format_speed_instructions_model_and_voice
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(speech_response) do |captured, _response|
       client.speak(
@@ -764,14 +783,14 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_speak_uses_class_level_configured_client
-    AiLite.configure do |config|
+    provider.configure do |config|
       config.api_key = "configured-key"
       config.speech_model = "gpt-speech-config"
       config.speech_voice = "marin"
     end
 
     with_stubbed_http(speech_response) do |captured, _response|
-      AiLite.speak("Use configured defaults")
+      provider.speak("Use configured defaults")
       payload = JSON.parse(captured[:http].last_request.body)
 
       assert_equal "gpt-speech-config", payload["model"]
@@ -781,7 +800,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_speak_writes_audio_to_output_path_and_returns_metadata
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     Tempfile.create(["speech", ".mp3"]) do |file|
       with_stubbed_http(speech_response("fake audio")) do |_captured, _response|
@@ -801,7 +820,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_speak_base64_true_returns_encoded_audio
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(speech_response("fake audio")) do |_captured, _response|
       result = client.speak("Encode this", base64: true)
@@ -812,7 +831,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_speak_debug_true_returns_raw_audio
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(speech_response("fake audio")) do |_captured, _response|
       result = client.speak("Debug this", debug: true)
@@ -823,7 +842,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_speak_http_errors_return_standard_envelope
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
     body = JSON.generate("error" => { "message" => "Unsupported voice" })
 
     with_stubbed_http(FakeResponse.new("400", body)) do |_captured, _response|
@@ -838,7 +857,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_transcribe_sends_post_to_audio_transcriptions_with_default_multipart_payload
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     Tempfile.create(["meeting", ".mp3"]) do |file|
       file.binmode
@@ -868,7 +887,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_transcribe_includes_options_and_optional_fields
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     Tempfile.create(["meeting", ".wav"]) do |file|
       file.binmode
@@ -908,7 +927,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_transcribe_uses_class_level_configured_client
-    AiLite.configure do |config|
+    provider.configure do |config|
       config.api_key = "configured-key"
       config.transcription_model = "gpt-transcription-config"
     end
@@ -919,7 +938,7 @@ class AiLiteTest < Minitest::Test
       file.flush
 
       with_stubbed_http(transcription_response) do |captured, _response|
-        AiLite.transcribe(file.path)
+        provider.transcribe(file.path)
         request = captured[:http].last_request
 
         assert_multipart_field request.body, "model", "gpt-transcription-config"
@@ -929,7 +948,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_transcribe_returns_plain_text_response_formats
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     Tempfile.create(["meeting", ".webm"]) do |file|
       file.binmode
@@ -948,7 +967,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_transcribe_debug_true_returns_raw_response
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     Tempfile.create(["meeting", ".ogg"]) do |file|
       file.binmode
@@ -965,7 +984,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_transcribe_http_errors_return_standard_envelope
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
     body = JSON.generate("error" => { "message" => "Unsupported audio format" })
 
     Tempfile.create(["meeting", ".mp3"]) do |file|
@@ -986,7 +1005,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_transcribe_local_file_errors_return_standard_envelope
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     missing_result = client.transcribe("tmp/missing-audio.mp3")
     assert_nil missing_result["content"]
@@ -1003,7 +1022,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_http_errors_return_standard_envelope
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
     body = JSON.generate("error" => { "message" => "Invalid API key" })
 
     with_stubbed_http(FakeResponse.new("401", body)) do |_captured, _response|
@@ -1018,7 +1037,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_debug_true_returns_raw_http_error_response
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
     body = JSON.generate("error" => { "message" => "Invalid API key" })
 
     with_stubbed_http(FakeResponse.new("401", body)) do |_captured, _response|
@@ -1032,7 +1051,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_response_parse_errors_return_standard_envelope
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(FakeResponse.new("200", "not-json")) do |_captured, _response|
       result = client.chat("Say hello")
@@ -1046,7 +1065,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_debug_true_returns_raw_response_parse_error_body
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
 
     with_stubbed_http(FakeResponse.new("200", "not-json")) do |_captured, _response|
       result = client.chat("Say hello", debug: true)
@@ -1059,7 +1078,7 @@ class AiLiteTest < Minitest::Test
   end
 
   def test_network_errors_return_standard_envelope
-    client = AiLite.new(api_key: "token-abc")
+    client = provider.new(api_key: "token-abc")
     original_start = Net::HTTP.method(:start)
 
     Net::HTTP.singleton_class.send(:define_method, :start) do |_host, _port, use_ssl:, &_block|
@@ -1206,5 +1225,110 @@ class AiLiteTest < Minitest::Test
     yield captured, response
   ensure
     Net::HTTP.singleton_class.send(:define_method, :start, original_start)
+  end
+end
+
+# Run the same HTTP and result contract against every legacy entry point.
+class AiLiteLegacyTest < AiLiteTest
+  def provider
+    AiLite
+  end
+end
+
+class AiLiteNamespaceTest < Minitest::Test
+  def setup
+    AiLite::OpenAI.reset_configuration!
+  end
+
+  def test_provider_calls_are_quiet_and_constants_remain_compatible
+    _stdout, stderr = capture_io do
+      AiLite::OpenAI.configure { |config| config.api_key = "test-key" }
+      assert_instance_of AiLite::OpenAI, AiLite::OpenAI.client
+      AiLite::OpenAI.new
+    end
+
+    assert_empty stderr
+    assert_same AiLite::OpenAI::Configuration, AiLite::Configuration
+    assert_equal AiLite::OpenAI::API_BASE_URL, AiLite::API_BASE_URL
+    refute AiLite::OpenAI < AiLite
+  end
+
+  def test_legacy_configuration_and_client_are_shared_with_openai
+    capture_io do
+      AiLite.configure { |config| config.api_key = "legacy-key" }
+      assert_same AiLite.configuration, AiLite::OpenAI.configuration
+      assert_same AiLite.client, AiLite::OpenAI.client
+      assert_equal "legacy-key", AiLite::OpenAI.new.api_key
+      assert_instance_of AiLite::OpenAI, AiLite.new
+
+      first_client = AiLite.client
+      AiLite::OpenAI.configure { |config| config.api_key = "provider-key" }
+      refute_same first_client, AiLite.client
+      assert_equal "provider-key", AiLite.new.api_key
+
+      second_client = AiLite::OpenAI.client
+      AiLite.reset_client!
+      refute_same second_client, AiLite::OpenAI.client
+      AiLite.reset_configuration!
+      assert_nil AiLite::OpenAI.configuration.api_key
+    end
+  end
+
+  def test_each_legacy_entry_point_warns_only_once_and_preserves_arguments
+    previous = AiLite.instance_variable_get(:@deprecated_entry_points)
+    AiLite.instance_variable_set(:@deprecated_entry_points, {})
+    methods = %i[new configuration configure reset_configuration! client reset_client!
+                 chat chat_stream moderate embed image speak transcribe
+       available_models model_available? configured_models check_configured_models]
+
+    stdout, stderr = capture_io do
+      methods.each do |name|
+        test_case = self
+        handler = lambda do |*args, **kwargs, &block|
+          test_case.assert_equal ["input"], args
+          test_case.assert_equal({ debug: true }, kwargs)
+          test_case.assert_equal :block_result, block.call
+          :result
+        end
+        next if name == :new
+
+        original = AiLite::OpenAI.method(name)
+        begin
+          AiLite::OpenAI.define_singleton_method(name, &handler)
+          2.times do
+            assert_equal :result, AiLite.public_send(name, "input", debug: true) { :block_result }
+          end
+        ensure
+          AiLite::OpenAI.define_singleton_method(name, original)
+        end
+      end
+      2.times { AiLite.new(api_key: "test-key") }
+    end
+
+    assert_empty stdout
+    assert_equal methods.length, stderr.lines.length
+    methods.each do |name|
+      assert_includes stderr, "AiLite.#{name} is deprecated. Use AiLite::OpenAI.#{name} instead."
+    end
+    assert_includes stderr, "removed in v2.0"
+  ensure
+    AiLite.instance_variable_set(:@deprecated_entry_points, previous)
+  end
+
+  def test_provider_can_be_required_directly_in_a_fresh_process
+    require "open3"
+    require "rbconfig"
+    script = <<~'CODE'
+      require "ai_lite/openai"
+      abort unless AiLite::OpenAI.new(api_key: "test-key").model == AiLite::OpenAI::DEFAULT_MODEL
+      require "ai_lite"
+      abort unless AiLite::Configuration.equal?(AiLite::OpenAI::Configuration)
+    CODE
+    stdout, stderr, status = Open3.capture3(
+      RbConfig.ruby, "-I#{File.expand_path('../lib', __dir__)}", "-e", script
+    )
+    assert status.success?, stderr
+    assert_empty stdout
+    assert_empty stderr
   end
 end
