@@ -5,7 +5,7 @@ Gem::Specification.new do |spec|
   spec.version = AiLite::VERSION
   spec.authors = ["William Basmayor"]
   spec.summary = "Lightweight Ruby client with separate OpenAI and Gemini providers."
-  spec.description = "AI Lite is a dependency-light Ruby client for Rails apps and plain Ruby projects, using only the Ruby standard library. It provides OpenAI chat, streaming, moderation, embeddings, images, speech, transcription, and model checks, plus Gemini chat, streaming, structured media inputs, and model checks."
+  spec.description = "AI Lite is a dependency-light Ruby client for Rails apps and plain Ruby projects, using only the Ruby standard library. It provides OpenAI chat, streaming, moderation, embeddings, images, speech, transcription, and model checks, plus Gemini chat, streaming, embeddings, image generation, structured media inputs, and model checks."
   spec.homepage = "https://github.com/wbasmayor/ai-lite"
   spec.license = "MIT"
   spec.metadata["source_code_uri"] = spec.homepage

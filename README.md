@@ -1,29 +1,41 @@
 # AI Lite
 
-AI Lite is a pure Ruby, dependency-light client with separate OpenAI and Gemini providers.
-OpenAI supports the full utility methods below; Gemini supports chat and streaming with text and structured media input.
+AI Lite is a lightweight, pure Ruby client for OpenAI and Gemini. Both providers
+support chat, streaming, embeddings, image generation, and model availability
+checks through simple interfaces and a consistent result format.
 
-It is built for Rails apps and plain Ruby projects where installing a full OpenAI SDK is too heavy, incompatible, or unnecessary. It is especially useful in legacy Rails apps where Rails, ActiveSupport, Ruby, or HTTP-client dependency constraints make larger client libraries difficult to add.
-
-Use AI Lite when you want a small OpenAI client that works without tying your app to a specific Rails version or a larger dependency stack.
+It is built for Rails apps and plain Ruby projects that need AI features with
+minimal dependencies. It is especially useful in legacy Rails apps where Ruby,
+Rails, or HTTP-client dependency constraints make larger SDKs difficult to add.
 
 This gem is intentionally small:
 
 - No Rails dependency
-- No official OpenAI gem dependency
+- No provider SDK dependency
 - No Faraday, HTTParty, ActiveSupport, or connection pool dependency
 - Uses only Ruby stdlib: `Net::HTTP`, `URI`, `JSON`, `Base64`, and `SecureRandom`
 
-It is not meant to replace the official OpenAI SDK. It is a small wrapper for projects that only need a few clean interfaces:
+Choose a provider and call the methods your app needs:
 
 ```ruby
-ai.chat("Say hello")
-ai.moderate("User submitted text")
-ai.embed("Text to vectorize")
-ai.image("A simple app icon")
-ai.speak("Read this aloud")
-ai.transcribe("tmp/meeting.mp3")
+require "ai_lite"
+
+openai = AiLite::OpenAI.new # Reads OPENAI_API_KEY
+gemini = AiLite::Gemini.new # Reads GEMINI_API_KEY
+
+openai.chat("Say hello")
+gemini.chat("Say hello")
+
+openai.embed("Text to vectorize")
+gemini.embed("Text to vectorize")
+
+openai.image("A simple app icon")
+gemini.image("A simple app icon")
 ```
+
+Each provider has independent configuration and native API options. OpenAI also
+supports moderation, speech, and file transcription; Gemini supports structured
+media input and a YouTube helper. The table below lists the available methods.
 
 ## Provider support
 
@@ -32,7 +44,8 @@ ai.transcribe("tmp/meeting.mp3")
 | `chat`, `chat_stream` | Yes | Yes |
 | Four model helpers | Yes | Yes |
 | `youtube` | No | Yes |
-| `moderate`, `embed`, `image`, `speak`, `transcribe` | Yes | Not implemented |
+| `embed`, `image` | Yes | Yes |
+| `moderate`, `speak`, `transcribe` | Yes | Not implemented |
 
 Unsupported provider methods are absent and raise Ruby's `NoMethodError` if called.
 Configure providers during application startup; do not mutate shared configuration
@@ -58,6 +71,8 @@ does not load `.env` automatically.
 AiLite::Gemini.configure do |config|
   config.api_key = ENV["GEMINI_API_KEY"]
   config.model = "gemini-3.8-flash"
+  config.embedding_model = "gemini-embedding-001"
+  config.image_model = "gemini-nano-banana-2.1"
   config.timeout = 120
   config.max_output_tokens = 2000
 end
@@ -117,9 +132,71 @@ return an error rather than pretending the answer is complete; no tools are
 executed automatically. Input/API/transport errors return an error envelope;
 constructing a client without a key raises `ArgumentError`.
 
-Gemini embeddings and image/speech methods are not implemented yet. Use `chat_stream` for streaming; `chat` rejects
+Gemini speech and file transcription methods are not implemented yet. Use `chat_stream` for streaming; `chat` rejects
 `stream: true`. Both methods reject `background: true` before sending a request.
 Legacy `AiLite` entry points still use OpenAI.
+
+### Gemini embeddings
+
+`embed` mirrors OpenAI's text input and return shape: a string returns one numeric
+vector in `content`; an array returns a list of vectors in input order, including
+an array containing just one string.
+
+```ruby
+gemini = AiLite::Gemini.new
+result = gemini.embed("Text to vectorize")
+result["content"] # [0.12, -0.34, ...]
+
+gemini.embed(["First text", "Second text"], dimensions: 768)
+AiLite::Gemini.embed("Search query", options: { taskType: "RETRIEVAL_QUERY" })
+```
+
+The default is `gemini-embedding-001`. Override it with `embedding_model:` in the
+constructor, `config.embedding_model`, or `model:` per call. Both bare model IDs
+and `models/` prefixes are accepted. Model checks include the embedding model.
+
+Single strings use `embedContent`; arrays use one synchronous `batchEmbedContents`
+request. `dimensions:` maps to `outputDimensionality`. Native request fields in
+`options:` apply to each input; explicit model, input, and dimensions take precedence.
+See Google's [embedding API reference](https://ai.google.dev/api/embeddings).
+
+Gemini returns numeric vectors; `encoding_format:` may be omitted or set to
+`"float"`. Other formats return an error envelope. Empty inputs and invalid dimensions
+also return errors before making a request. `debug: true` retains the provider
+response and any usage metadata in `raw`; `response_id` is `nil` for embeddings.
+
+### Gemini image generation
+
+```ruby
+gemini = AiLite::Gemini.new
+result = gemini.image("A cat astronaut on the moon", output_path: "tmp/cat.jpg")
+result["content"] # Base64 image data, also returned when saving to a file
+
+AiLite::Gemini.image("A mountain landscape", options: {
+  response_format: { type: "image", aspect_ratio: "16:9", image_size: "2K" }
+})
+```
+
+The default image model is `gemini-nano-banana-2.1`. Set `config.image_model`,
+pass `image_model:` to the constructor, or override `model:` per call.
+Model checks include this setting. Requests use the Interactions API, with native
+settings passed through `options:`. Explicit prompt and model take precedence.
+Image requests do not inherit the chat output-token limit.
+
+Like OpenAI's `image`, `content` contains the first generated image as base64.
+Only image blocks from `model_output` steps are selected. `output_path:` saves
+its decoded bytes; the parent directory must already exist. Files retain the
+provider's encoding: the filename does not convert the image. Use `debug: true`
+to inspect MIME type, additional images, text, and usage in `raw`. Gemini can return
+JPEG data even when the output filename ends in `.png`; choose the extension to
+match the returned image MIME type. AI Lite does not transcode images.
+
+The initial interface accepts a text prompt, `model:`, `output_path:`, `debug:`,
+and `options:`. OpenAI-specific size, quality, background, and output format
+keywords are not shared; use Gemini's native `response_format` options as above.
+Streaming and background execution are rejected. Failed/incomplete interactions,
+missing or invalid image data, and file-write errors return error envelopes.
+See Google's [image generation guide](https://ai.google.dev/gemini-api/docs/image-generation).
 
 ### Gemini model checks
 
@@ -129,7 +206,7 @@ result = gemini.available_models
 puts result["content"] unless result["error"]
 
 gemini.model_available?("gemini-3.8-flash") # true / false / nil on lookup failure
-gemini.configured_models                  # { "chat" => "gemini-3.8-flash" }
+gemini.configured_models                  # Includes chat, embedding, and image models
 gemini.check_configured_models            # Standard envelope containing a report
 
 # All four also work at class level:

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add Gemini image generation with base64 results, optional file output, native
+  options, image model configuration, and model checks.
+
+- Add Gemini text embeddings for single and multiple inputs, with dimensions,
+  embedding model configuration, model checks, and the standard result envelope.
+
 ## 1.0.0 (unreleased)
 
 - Introduce independent `AiLite::OpenAI` and `AiLite::Gemini` providers.
@@ -14,5 +22,5 @@
 - Treat failed/incomplete OpenAI generations as errors even when HTTP status is 200.
 - Handle fragmented UTF-8 and mixed SSE line endings in both stream parsers.
 
-Gemini embeddings, image generation, speech, file transcription, additional
+Gemini image generation, speech, file transcription, additional
 providers, and async convenience methods are deferred beyond v1.

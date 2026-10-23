@@ -130,7 +130,7 @@ class GeminiTest < Minitest::Test
     assert_same openai, AiLite::OpenAI.client
     assert_equal "openai-key", openai.api_key
     refute AiLite::Gemini < AiLite::OpenAI
-    %i[moderate transcribe image speak embed].each { |method| refute_respond_to gemini, method }
+    %i[moderate transcribe speak].each { |method| refute_respond_to gemini, method }
     with_http do
       assert_equal "Hello", AiLite::Gemini.chat("Hello")["content"]
     end

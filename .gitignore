@@ -1,3 +1,5 @@
 *.gem
 .env
 v1-release-plans.md
+RELEASE_CHECKLIST.md
+/tmp/

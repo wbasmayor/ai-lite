@@ -1,9 +1,12 @@
 require "json"
 require "net/http"
 require "uri"
+require "base64"
 require_relative "version"
 require_relative "gemini/configuration"
 require_relative "gemini/chat"
+require_relative "gemini/embeddings"
+require_relative "gemini/images"
 require_relative "gemini/streaming"
 require_relative "gemini/youtube"
 require_relative "gemini/models"
@@ -43,19 +46,29 @@ class AiLite
         client.chat_stream(message, **kwargs, &block)
       end
 
+      def image(prompt, **kwargs)
+        client.image(prompt, **kwargs)
+      end
+
+      def embed(input, **kwargs)
+        client.embed(input, **kwargs)
+      end
+
       def chat(message, **kwargs)
         client.chat(message, **kwargs)
       end
     end
 
-    attr_reader :api_key, :model, :timeout, :max_output_tokens, :headers
+    attr_reader :api_key, :model, :embedding_model, :image_model, :timeout, :max_output_tokens, :headers
 
-    def initialize(api_key: nil, model: nil, timeout: nil, max_output_tokens: nil)
+    def initialize(api_key: nil, model: nil, embedding_model: nil, image_model: nil, timeout: nil, max_output_tokens: nil)
       config = self.class.configuration
       @api_key = api_key || config.api_key || ENV["GEMINI_API_KEY"]
       raise ArgumentError, "Missing Gemini API key" if @api_key.to_s.strip.empty?
 
       @model = model || config.model
+      @embedding_model = embedding_model || config.embedding_model
+      @image_model = image_model || config.image_model
       @timeout = timeout || config.timeout
       @max_output_tokens = max_output_tokens || config.max_output_tokens
       @headers = { "x-goog-api-key" => @api_key, "Content-Type" => "application/json" }
@@ -64,7 +77,11 @@ class AiLite
     private
 
     def post_interaction(payload)
-      uri = URI.parse("#{API_BASE_URL}/interactions")
+      post_json(payload, endpoint: "#{API_BASE_URL}/interactions")
+    end
+
+    def post_json(payload, endpoint:)
+      uri = URI.parse(endpoint)
       request = Net::HTTP::Post.new(uri)
       headers.each { |key, value| request[key] = value }
       request.body = JSON.generate(payload)

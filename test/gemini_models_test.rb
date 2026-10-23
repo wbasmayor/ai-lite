@@ -65,7 +65,7 @@ class GeminiModelsTest < Minitest::Test
   end
   def test_local_configuration_and_single_paginated_check
     with_pages do |http|
-      assert_equal({ "chat" => AiLite::Gemini::DEFAULT_MODEL }, AiLite::Gemini.configured_models)
+      assert_equal({ "chat" => AiLite::Gemini::DEFAULT_MODEL, "embedding" => AiLite::Gemini::DEFAULT_EMBEDDING_MODEL, "image" => AiLite::Gemini::DEFAULT_IMAGE_MODEL }, AiLite::Gemini.configured_models)
       snapshot = @client.configured_models
       snapshot["chat"].replace("changed")
       assert_equal "models/test-model", @client.model
@@ -74,7 +74,8 @@ class GeminiModelsTest < Minitest::Test
     with_pages(page(["other"], "next"), page(["test-model"])) do |http|
       result = @client.check_configured_models
       assert_equal 2, http.requests.size
-      assert_equal({ "chat" => { "model" => "models/test-model", "usage" => "chat", "available" => true, "error" => nil } }, result["content"])
+      assert_equal({ "chat" => { "model" => "models/test-model", "usage" => "chat", "available" => true, "error" => nil } }, result["content"].slice("chat"))
+      assert_equal false, result.dig("content", "embedding", "available")
       assert_nil result["raw"]
     end
   end
