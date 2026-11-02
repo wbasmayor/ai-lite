@@ -2,7 +2,7 @@ class AiLite
   class OpenAI
     module Streaming
       # Text deltas are yielded immediately; the return value is the final envelope.
-      def chat_stream(message, model: nil, instructions: nil, previous_response_id: nil, max_output_tokens: nil, debug: false, options: {}, &block)
+      def chat_stream(message, model: nil, instructions: nil, previous_response_id: nil, max_output_tokens: nil, tools: nil, tool_results: nil, debug: false, options: {}, &block)
         raise ArgumentError, "chat_stream requires a block" unless block
 
         status = "unknown"
@@ -11,12 +11,14 @@ class AiLite
         raw = nil
         callback_error = nil
         begin
-          payload = options.reject { |key, _| key.to_s == "stream" }.merge(
-            model: model || self.model, input: message, stream: true,
-            max_output_tokens: max_output_tokens || self.max_output_tokens
-          )
-          payload[:instructions] = instructions if instructions
-          payload[:previous_response_id] = previous_response_id if previous_response_id
+          payload = options.each_with_object({}) { |(key, value), hash| hash[key.to_s] = value }
+          input = tool_result_input(message, tool_results, previous_response_id || payload["previous_response_id"])
+          raise ArgumentError, "Missing chat input" if input.nil?
+          payload.merge!("model" => model || self.model, "input" => input, "stream" => true,
+                         "max_output_tokens" => max_output_tokens || self.max_output_tokens)
+          payload["instructions"] = instructions if instructions
+          payload["previous_response_id"] = previous_response_id if previous_response_id
+          apply_chat_tools(payload, tools)
           uri = URI.parse(response_endpoint)
           request = Net::HTTP::Post.new(uri)
           headers.each { |key, value| request[key] = value }
@@ -61,9 +63,11 @@ class AiLite
                             when "response.incomplete"
                               "Response incomplete: #{raw.dig('incomplete_details', 'reason') || 'unknown reason'}"
                             end
+                    error ||= error_message(raw) if raw["error"]
                     content = error ? text : parse_content(extract_output_text(raw))
                     result = prettify_data(status: status, content: content, error: error,
                                            response_id: response_id, raw: raw, debug: debug)
+                    attach_tool_calls(result, raw)
                     throw :ai_lite_stream_finished
                   when "error"
                     result = prettify_data(status: status, content: text, error: error_message(event),

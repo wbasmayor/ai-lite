@@ -1,13 +1,13 @@
 class AiLite
   class Gemini
     module Chat
-      def chat(message, model: nil, instructions: nil, previous_response_id: nil, max_output_tokens: nil, debug: false, options: {})
+      def chat(message, model: nil, instructions: nil, previous_response_id: nil, max_output_tokens: nil, tools: nil, tool_results: nil, debug: false, options: {})
         response = nil
         raw = nil
         response_id = nil
         payload = chat_payload(message, model: model, instructions: instructions,
                                previous_response_id: previous_response_id,
-                               max_output_tokens: max_output_tokens, options: options)
+                               max_output_tokens: max_output_tokens, options: options, tools: tools, tool_results: tool_results)
         response = post_interaction(payload)
         raw = response.body
         raw = JSON.parse(raw)
@@ -21,7 +21,7 @@ class AiLite
 
         error = if raw["error"]
                   error_message(raw)
-                elsif raw["status"] != "completed"
+                elsif raw["status"] != "completed" && !(raw["status"] == "requires_action" && !extract_tool_calls(raw).empty?)
                   "Gemini interaction #{raw['status'] || 'has no status'}; inspect raw with debug: true"
                 end
         steps = raw["steps"]
@@ -43,16 +43,19 @@ class AiLite
                       text
                     end
                   end
-        result_envelope(status: response.code.to_i, content: content, error: error,
+        result = result_envelope(status: response.code.to_i, content: content, error: error,
                         response_id: response_id, raw: raw, debug: debug)
+        attach_tool_calls(result, raw)
       rescue StandardError => e
         result_envelope(status: response ? response.code.to_i : "unknown", error: e.message,
                         response_id: response_id, raw: raw, debug: debug)
       end
       private
 
-      def chat_payload(message, model:, instructions:, previous_response_id:, max_output_tokens:, options:, stream: false)
+      def chat_payload(message, model:, instructions:, previous_response_id:, max_output_tokens:, options:, stream: false, tools: nil, tool_results: nil)
         payload = options.each_with_object({}) { |(key, value), result| result[key.to_s] = value }
+        message = tool_result_input(message, tool_results, previous_response_id || payload["previous_interaction_id"])
+        apply_chat_tools(payload, tools)
         if (!stream && payload["stream"]) || payload["background"]
           raise ArgumentError, "Use chat_stream for streaming; background execution is not supported"
         end

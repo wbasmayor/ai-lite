@@ -1,7 +1,7 @@
 class AiLite
   class Gemini
     module Streaming
-      def chat_stream(message, model: nil, instructions: nil, previous_response_id: nil, max_output_tokens: nil, debug: false, options: {}, &block)
+      def chat_stream(message, model: nil, instructions: nil, previous_response_id: nil, max_output_tokens: nil, tools: nil, tool_results: nil, debug: false, options: {}, &block)
         raise ArgumentError, "chat_stream requires a block" unless block
 
         status = "unknown"
@@ -14,7 +14,7 @@ class AiLite
         begin
           payload = chat_payload(message, model: model, instructions: instructions,
                                  previous_response_id: previous_response_id,
-                                 max_output_tokens: max_output_tokens, options: options, stream: true)
+                                 max_output_tokens: max_output_tokens, options: options, stream: true, tools: tools, tool_results: tool_results)
           uri = URI.parse("#{API_BASE_URL}/interactions")
           request = Net::HTTP::Post.new(uri)
           headers.each { |key, value| request[key] = value }
@@ -22,6 +22,9 @@ class AiLite
           request.body = JSON.generate(payload)
           result = nil
           step_types = {}
+          function_steps = {}
+          argument_fragments = {}
+          finished_functions = {}
           Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https") do |http|
             http.open_timeout = timeout
             http.read_timeout = timeout
@@ -43,9 +46,17 @@ class AiLite
                     interaction = event.fetch("interaction")
                     response_id = interaction["id"] || response_id
                   when "step.start"
-                    step_types[event.fetch("index")] = event.fetch("step").fetch("type")
+                    index = event.fetch("index")
+                    step = event.fetch("step")
+                    step_types[index] = step.fetch("type")
+                    function_steps[index] = step.dup if step["type"] == "function_call"
                   when "step.delta"
                     delta = event.fetch("delta")
+                    if step_types[event["index"]] == "function_call" && delta["type"] == "arguments_delta"
+                      index = event["index"]
+                      argument_fragments[index] ||= +""
+                      argument_fragments[index] << delta.fetch("arguments")
+                    end
                     if step_types[event["index"]] == "model_output" && delta["type"] == "text"
                       chunk = delta.fetch("text")
                       text << chunk
@@ -56,9 +67,22 @@ class AiLite
                         raise
                       end
                     end
+                  when "step.stop"
+                    index = event["index"]
+                    if function_steps.key?(index)
+                      function_steps[index]["arguments"] = argument_fragments[index] if argument_fragments.key?(index)
+                      finished_functions[index] = function_steps[index]
+                    end
                   when "interaction.status_update"
                     response_id = event["interaction_id"] || response_id
-                    if %w[failed cancelled incomplete requires_action].include?(event["status"])
+                    if event["status"] == "requires_action"
+                      raise "Gemini interaction requires_action before function calls completed" unless function_steps.size == finished_functions.size && !finished_functions.empty?
+                      result = result_envelope(status: status, content: text.empty? ? nil : text,
+                        response_id: response_id, raw: raw, debug: debug)
+                      attach_tool_calls(result, { "steps" => finished_functions.values })
+                      throw :ai_lite_gemini_finished
+                    end
+                    if %w[failed cancelled incomplete].include?(event["status"])
                       result = result_envelope(status: status, content: text.empty? ? nil : text,
                         response_id: response_id, error: "Gemini interaction #{event['status']}", raw: raw, debug: debug)
                       throw :ai_lite_gemini_finished
@@ -67,9 +91,10 @@ class AiLite
                     interaction = event.fetch("interaction")
                     response_id = interaction["id"] || response_id
                     raw = { "interaction" => interaction, "events" => events } if debug
+                    tool_source = interaction.key?("steps") ? interaction : { "steps" => finished_functions.values }
                     error = if interaction["error"]
                               error_message(interaction)
-                            elsif interaction["status"] != "completed"
+                            elsif interaction["status"] != "completed" && !(interaction["status"] == "requires_action" && !extract_tool_calls(tool_source).empty?)
                               "Gemini interaction #{interaction['status'] || 'has no status'}"
                             end
                     content = text.empty? ? nil : text
@@ -82,6 +107,10 @@ class AiLite
                     end
                     result = result_envelope(status: status, content: content, response_id: response_id,
                                              error: error, raw: raw, debug: debug)
+                    unless error
+                      raise "Gemini function call stream ended before step.stop" if !interaction.key?("steps") && function_steps.size != finished_functions.size
+                      attach_tool_calls(result, tool_source)
+                    end
                     throw :ai_lite_gemini_finished
                   when "error"
                     result = result_envelope(status: status, content: text.empty? ? nil : text,

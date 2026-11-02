@@ -38,7 +38,7 @@ class AiLite
         unless content.is_a?(String) && !content.empty?
           raise "No inline image data returned; inspect raw with debug: true"
         end
-        bytes = Base64.strict_decode64(content)
+        bytes = content.unpack1("m0")
         raise "Empty image data returned" if bytes.empty?
 
         File.binwrite(output_path, bytes) if output_path

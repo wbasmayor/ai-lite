@@ -65,7 +65,7 @@ class GeminiModelsTest < Minitest::Test
   end
   def test_local_configuration_and_single_paginated_check
     with_pages do |http|
-      assert_equal({ "chat" => AiLite::Gemini::DEFAULT_MODEL, "embedding" => AiLite::Gemini::DEFAULT_EMBEDDING_MODEL, "image" => AiLite::Gemini::DEFAULT_IMAGE_MODEL }, AiLite::Gemini.configured_models)
+      assert_equal({ "chat" => AiLite::Gemini::DEFAULT_MODEL, "embedding" => AiLite::Gemini::DEFAULT_EMBEDDING_MODEL, "image" => AiLite::Gemini::DEFAULT_IMAGE_MODEL, "speech" => AiLite::Gemini::DEFAULT_SPEECH_MODEL, "transcription" => AiLite::Gemini::DEFAULT_TRANSCRIPTION_MODEL }, AiLite::Gemini.configured_models)
       snapshot = @client.configured_models
       snapshot["chat"].replace("changed")
       assert_equal "models/test-model", @client.model

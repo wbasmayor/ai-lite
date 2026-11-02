@@ -619,7 +619,7 @@ class AiLiteTest < Minitest::Test
 
   def test_image_sends_post_to_images_with_default_payload
     client = provider.new(api_key: "token-abc")
-    image_data = Base64.strict_encode64("fake image")
+    image_data = ["fake image"].pack("m0")
 
     with_stubbed_http(image_response(b64_json: image_data)) do |captured, _response|
       result = client.image("A small ruby gem logo")
@@ -689,7 +689,7 @@ class AiLiteTest < Minitest::Test
 
   def test_image_writes_decoded_content_to_output_path
     client = provider.new(api_key: "token-abc")
-    image_data = Base64.strict_encode64("fake image")
+    image_data = ["fake image"].pack("m0")
 
     Tempfile.create(["generated", ".png"]) do |file|
       with_stubbed_http(image_response(b64_json: image_data)) do |_captured, _response|
@@ -703,7 +703,7 @@ class AiLiteTest < Minitest::Test
 
   def test_image_debug_true_returns_raw_usage
     client = provider.new(api_key: "token-abc")
-    image_data = Base64.strict_encode64("fake image")
+    image_data = ["fake image"].pack("m0")
 
     with_stubbed_http(image_response(b64_json: image_data)) do |_captured, _response|
       result = client.image("A debuggable image", debug: true)
@@ -825,7 +825,7 @@ class AiLiteTest < Minitest::Test
     with_stubbed_http(speech_response("fake audio")) do |_captured, _response|
       result = client.speak("Encode this", base64: true)
 
-      assert_equal Base64.strict_encode64("fake audio"), result["content"]
+      assert_equal ["fake audio"].pack("m0"), result["content"]
       assert_nil result["raw"]
     end
   end
@@ -1155,7 +1155,7 @@ class AiLiteTest < Minitest::Test
     FakeResponse.new("200", body)
   end
 
-  def image_response(b64_json: Base64.strict_encode64("fake image"))
+  def image_response(b64_json: ["fake image"].pack("m0"))
     image = {}
     image["b64_json"] = b64_json if b64_json
 

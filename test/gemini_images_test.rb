@@ -35,15 +35,15 @@ class GeminiImagesTest < Minitest::Test
     Net::HTTP.define_singleton_method(:start, original)
   end
 
-  PNG = Base64.strict_decode64("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=")
+  PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=".unpack1("m0")
 
   def image_body
     { "id" => "image-123", "status" => "completed", "steps" => [
-      { "type" => "thought", "content" => [{ "type" => "image", "data" => Base64.strict_encode64("hidden") }] },
+      { "type" => "thought", "content" => [{ "type" => "image", "data" => ["hidden"].pack("m0") }] },
       { "type" => "model_output", "content" => [
         { "type" => "text", "text" => "Here is your image" },
-        { "type" => "image", "mime_type" => "image/png", "data" => Base64.strict_encode64(PNG) },
-        { "type" => "image", "mime_type" => "image/png", "data" => Base64.strict_encode64("second") }
+        { "type" => "image", "mime_type" => "image/png", "data" => [PNG].pack("m0") },
+        { "type" => "image", "mime_type" => "image/png", "data" => ["second"].pack("m0") }
       ] }
     ] }
   end
@@ -51,7 +51,7 @@ class GeminiImagesTest < Minitest::Test
   def test_default_transport_first_image_and_envelope
     with_http(image_body) do |http|
       result = @client.image("A cat")
-      assert_equal({ "content" => Base64.strict_encode64(PNG), "status" => 200,
+      assert_equal({ "content" => [PNG].pack("m0"), "status" => 200,
                      "error" => nil, "response_id" => "image-123", "raw" => nil }, result)
       request = http.request_received
       assert_equal "/v1beta/interactions", request.path
@@ -72,7 +72,7 @@ class GeminiImagesTest < Minitest::Test
         result = @client.image("A cat", model: "custom-image", output_path: path, options: options, debug: true)
         assert_nil result["error"]
         assert_equal PNG, File.binread(path)
-        assert_equal Base64.strict_encode64(PNG), result["content"]
+        assert_equal [PNG].pack("m0"), result["content"]
         assert_equal image_body, result["raw"]
         payload = JSON.parse(http.request_received.body)
         assert_equal "custom-image", payload["model"]

@@ -1,12 +1,15 @@
 require "json"
 require "net/http"
 require "uri"
-require "base64"
 require_relative "version"
 require_relative "gemini/configuration"
+require_relative "gemini/tokens"
+require_relative "gemini/tool_calling"
 require_relative "gemini/chat"
 require_relative "gemini/embeddings"
 require_relative "gemini/images"
+require_relative "gemini/speech"
+require_relative "gemini/transcription"
 require_relative "gemini/streaming"
 require_relative "gemini/youtube"
 require_relative "gemini/models"
@@ -46,6 +49,14 @@ class AiLite
         client.chat_stream(message, **kwargs, &block)
       end
 
+      def transcribe(file_path, **kwargs)
+        client.transcribe(file_path, **kwargs)
+      end
+
+      def speak(text, **kwargs)
+        client.speak(text, **kwargs)
+      end
+
       def image(prompt, **kwargs)
         client.image(prompt, **kwargs)
       end
@@ -54,14 +65,18 @@ class AiLite
         client.embed(input, **kwargs)
       end
 
+      def count_tokens(input, **kwargs)
+        client.count_tokens(input, **kwargs)
+      end
+
       def chat(message, **kwargs)
         client.chat(message, **kwargs)
       end
     end
 
-    attr_reader :api_key, :model, :embedding_model, :image_model, :timeout, :max_output_tokens, :headers
+    attr_reader :api_key, :model, :embedding_model, :image_model, :speech_model, :speech_voice, :transcription_model, :timeout, :max_output_tokens, :headers
 
-    def initialize(api_key: nil, model: nil, embedding_model: nil, image_model: nil, timeout: nil, max_output_tokens: nil)
+    def initialize(api_key: nil, model: nil, embedding_model: nil, image_model: nil, speech_model: nil, speech_voice: nil, transcription_model: nil, timeout: nil, max_output_tokens: nil)
       config = self.class.configuration
       @api_key = api_key || config.api_key || ENV["GEMINI_API_KEY"]
       raise ArgumentError, "Missing Gemini API key" if @api_key.to_s.strip.empty?
@@ -69,6 +84,9 @@ class AiLite
       @model = model || config.model
       @embedding_model = embedding_model || config.embedding_model
       @image_model = image_model || config.image_model
+      @speech_model = speech_model || config.speech_model
+      @speech_voice = speech_voice || config.speech_voice
+      @transcription_model = transcription_model || config.transcription_model
       @timeout = timeout || config.timeout
       @max_output_tokens = max_output_tokens || config.max_output_tokens
       @headers = { "x-goog-api-key" => @api_key, "Content-Type" => "application/json" }

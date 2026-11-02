@@ -1,10 +1,11 @@
-require "base64"
 require "json"
 require "net/http"
 require "securerandom"
 require "uri"
 require_relative "version"
 require_relative "openai/configuration"
+require_relative "openai/tokens"
+require_relative "openai/tool_calling"
 require_relative "openai/streaming"
 require_relative "openai/models"
 
@@ -29,6 +30,10 @@ class AiLite
 
       def client
         @client ||= new
+      end
+
+      def count_tokens(input, **kwargs)
+        client.count_tokens(input, **kwargs)
       end
 
       def chat(message, **kwargs)
@@ -85,15 +90,16 @@ class AiLite
       }
     end
 
-    def chat(message, model: nil, instructions: nil, previous_response_id: nil, max_output_tokens: nil, debug: false, options: {})
-      payload = options.merge(
-        model: model || self.model,
-        input: message,
-        max_output_tokens: max_output_tokens || self.max_output_tokens
-      )
-      payload[:instructions] = instructions if instructions
-      payload[:previous_response_id] = previous_response_id if previous_response_id
-
+    def chat(message, model: nil, instructions: nil, previous_response_id: nil, max_output_tokens: nil, tools: nil, tool_results: nil, debug: false, options: {})
+      payload = options.each_with_object({}) { |(key, value), hash| hash[key.to_s] = value }
+      previous_id = previous_response_id || payload["previous_response_id"]
+      input = tool_result_input(message, tool_results, previous_id)
+      raise ArgumentError, "Missing chat input" if input.nil?
+      payload.merge!("model" => model || self.model, "input" => input,
+                     "max_output_tokens" => max_output_tokens || self.max_output_tokens)
+      payload["instructions"] = instructions if instructions
+      payload["previous_response_id"] = previous_response_id if previous_response_id
+      apply_chat_tools(payload, tools)
       extract_content(post(payload), debug: debug)
     rescue => e
       prettify_data(status: "unknown", error: e.message, raw: nil, debug: debug)
@@ -257,7 +263,7 @@ class AiLite
                 reason = parsed_response.dig("incomplete_details", "reason")
                 ["Response #{parsed_response['status']}", reason].compact.join(": ")
               end
-      prettify_data(
+      result = prettify_data(
         status: status,
         content: content,
         error: error,
@@ -265,10 +271,11 @@ class AiLite
         raw: parsed_response,
         debug: debug
       )
+      attach_tool_calls(result, parsed_response)
     rescue JSON::ParserError => e
       prettify_data(status: response_status(response), error: e.message, raw: response&.body, debug: debug)
     rescue => e
-      prettify_data(status: response_status(response), error: e.message, raw: nil, debug: debug)
+      prettify_data(status: response_status(response), error: e.message, raw: parsed_response, debug: debug)
     end
 
     def extract_moderation(response, debug: false)
@@ -459,7 +466,7 @@ class AiLite
 
     def image_data_url(path)
       mime_type = image_mime_type(path)
-      "data:#{mime_type};base64,#{Base64.strict_encode64(File.binread(path))}"
+      "data:#{mime_type};base64,#{[File.binread(path)].pack("m0")}"
     end
 
     def image_mime_type(path)
@@ -509,11 +516,11 @@ class AiLite
     def write_image_output(path, content)
       raise "No image data returned" if content.to_s.empty?
 
-      File.binwrite(path, Base64.decode64(content))
+      File.binwrite(path, content.unpack1("m"))
     end
 
     def speech_content(audio, output_path:, base64:, response_format:)
-      return Base64.strict_encode64(audio) if base64
+      return [audio].pack("m0") if base64
       return audio unless output_path
 
       {

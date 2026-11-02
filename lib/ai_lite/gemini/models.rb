@@ -2,7 +2,7 @@ class AiLite
   class Gemini
     module Models
       def self.snapshot(source)
-        { "chat" => source.model, "embedding" => source.embedding_model, "image" => source.image_model }.transform_values do |model|
+        { "chat" => source.model, "embedding" => source.embedding_model, "image" => source.image_model, "speech" => source.speech_model, "transcription" => source.transcription_model }.transform_values do |model|
           model.is_a?(String) ? model.dup : model
         end
       end

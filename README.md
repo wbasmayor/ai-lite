@@ -1,7 +1,7 @@
 # AI Lite
 
 AI Lite is a lightweight, pure Ruby client for OpenAI and Gemini. Both providers
-support chat, streaming, embeddings, image generation, and model availability
+support chat, streaming, embeddings, image generation, speech, transcription, token counting, and model availability
 checks through simple interfaces and a consistent result format.
 
 It is built for Rails apps and plain Ruby projects that need AI features with
@@ -13,7 +13,7 @@ This gem is intentionally small:
 - No Rails dependency
 - No provider SDK dependency
 - No Faraday, HTTParty, ActiveSupport, or connection pool dependency
-- Uses only Ruby stdlib: `Net::HTTP`, `URI`, `JSON`, `Base64`, and `SecureRandom`
+- Uses only Ruby stdlib: `Net::HTTP`, `URI`, `JSON`, and `SecureRandom`
 
 Choose a provider and call the methods your app needs:
 
@@ -34,23 +34,192 @@ gemini.image("A simple app icon")
 ```
 
 Each provider has independent configuration and native API options. OpenAI also
-supports moderation, speech, and file transcription; Gemini supports structured
+supports moderation; Gemini supports structured
 media input and a YouTube helper. The table below lists the available methods.
 
 ## Provider support
 
 | Method | OpenAI | Gemini |
 | --- | --- | --- |
-| `chat`, `chat_stream` | Yes | Yes |
+| `chat`, `chat_stream`, `count_tokens` | Yes | Yes |
 | Four model helpers | Yes | Yes |
 | `youtube` | No | Yes |
-| `embed`, `image` | Yes | Yes |
-| `moderate`, `speak`, `transcribe` | Yes | Not implemented |
+| `embed`, `image`, `speak`, `transcribe` | Yes | Yes |
+| `moderate` | Yes | Not implemented |
 
 Unsupported provider methods are absent and raise Ruby's `NoMethodError` if called.
 Configure providers during application startup; do not mutate shared configuration
 or client headers while requests are running. The gem does not provide automatic
 retries, worker threads, or a background-job queue.
+
+## Function calling (OpenAI and Gemini)
+
+Pass native tool definitions through `tools:` on `chat` or `chat_stream`.
+Both providers accept the basic function definition below. Provider-specific
+fields and built-in tools retain their native formats; `options:` remains the
+escape hatch for settings such as tool choice.
+
+```ruby
+ai = AiLite::Gemini.new # Or AiLite::OpenAI.new
+
+tools = [{
+  type: "function",
+  name: "lookup_order",
+  description: "Look up an order's shipping status",
+  parameters: {
+    type: "object",
+    properties: { order_id: { type: "integer" } },
+    required: ["order_id"],
+    additionalProperties: false
+  }
+}]
+
+result = ai.chat("Where is order 123?", tools: tools)
+raise result["error"] if result["error"]
+
+# When a function is requested:
+# result["tool_calls"] => [
+#   { "id" => "call_123", "name" => "lookup_order",
+#     "arguments" => { "order_id" => 123 } }
+# ]
+```
+
+A tool request is a successful chat result. `content` may be nil or contain text
+alongside tool calls. The `tool_calls` key appears only when complete function
+calls are present; existing text-only envelopes are unchanged. OpenAI call IDs
+come from `call_id`, not the output item's `id`. Gemini IDs come from the
+function-call step's `id`. Arguments are decoded into hashes without requiring
+`debug: true`. Failed/incomplete responses do not expose executable tool calls.
+
+Your application validates arguments, authorizes access, and executes only
+functions it explicitly allows. For example, in a Rails controller:
+
+```ruby
+calls = result.fetch("tool_calls", [])
+unless calls.empty?
+  outputs = calls.map do |call|
+    raise "Unsupported tool" unless call["name"] == "lookup_order"
+    order_id = call["arguments"].fetch("order_id")
+    raise "Invalid order ID" unless order_id.is_a?(Integer)
+
+    order = current_user.orders.find(order_id)
+    { id: call["id"], name: call["name"], output: { status: order.status } }
+  end
+
+  result = ai.chat(
+    nil,
+    previous_response_id: result["response_id"],
+    tools: tools,
+    tool_results: outputs
+  )
+  raise result["error"] if result["error"]
+end
+
+puts result["content"]
+# The model may request more tools; your app decides whether to continue.
+```
+
+`tool_results:` takes a nonempty array of `{ id:, name:, output: }` hashes,
+requires `previous_response_id:`, and uses `nil` as the positional message.
+Strings are sent as text; other JSON-compatible outputs are JSON-encoded.
+The helper translates results into OpenAI `function_call_output` items or
+Gemini `function_result` steps. Return a result for every requested call and
+reuse the same provider/model and tool definitions. IDs refer to stored provider
+state; when using stateless requests, pass native history/results as the
+positional input instead. Preserve all provider-required history, including
+reasoning/thought items and signatures; normalized `tool_calls` alone are not
+full conversation history. Use non-streaming `chat` with `debug: true` for the full native response;
+streaming debug output may contain partial metadata plus events.
+
+`chat_stream` accepts the same tool keywords. Its block still receives text
+only; complete tool calls are returned in the final envelope after streaming.
+Do not execute streamed argument fragments. Class-level calls work too:
+`AiLite::OpenAI.chat(...)` and `AiLite::Gemini.chat(...)`.
+
+Explicit `tools:` overrides `options[:tools]`, including `tools: []` to clear
+it. AI Lite does not execute functions, dispatch method names, retry tool calls,
+or run an automatic agent loop. Built-in provider tools are passed through;
+only custom `function_call` outputs are normalized into `tool_calls`.
+
+See the [OpenAI function-calling guide](https://developers.openai.com/api/docs/guides/function-calling)
+and [Gemini function-calling guide](https://ai.google.dev/gemini-api/docs/function-calling)
+for native schemas and continuation requirements.
+
+## Token counting (both providers)
+
+```ruby
+openai = AiLite::OpenAI.new
+gemini = AiLite::Gemini.new
+
+result = openai.count_tokens("Hello from AI Lite.")
+result["content"] # Integer input-token count when error is nil
+result["error"]   # nil on success
+
+gemini.count_tokens("Hello from AI Lite.", instructions: "Be concise.")
+
+# Class-level methods use each provider's independent configuration:
+AiLite::OpenAI.count_tokens("Hello")
+AiLite::Gemini.count_tokens("Hello")
+```
+
+These are authenticated HTTP calls, not offline tokenizers. They count input
+only, without generating an answer or predicting output tokens or a final bill.
+Counts depend on the model and the supplied context. Both use the configured
+chat `model` by default; pass `model:` to override it. No tokenizer gem is needed.
+The standard envelope contains an integer `content`, a nil `response_id`, and
+`raw` only with `debug: true`. Check `error` before using the count; zero is a
+valid count, and failures return nil content. Chat output-token defaults are
+not added to counting requests.
+
+OpenAI uses `POST /v1/responses/input_tokens`. Pass a string or an array of native
+Responses input items, including supported media and conversation history:
+
+```ruby
+openai.count_tokens(
+  [
+    { role: "user", content: "Hello" },
+    { role: "assistant", content: "Hi!" },
+    { role: "user", content: "Tell me more." }
+  ],
+  instructions: "Be concise."
+)
+# Count a continuation using a response ID from an earlier chat:
+openai.count_tokens("Tell me more.", previous_response_id: previous_result["response_id"])
+```
+
+Gemini uses `POST /v1beta/models/{model}:countTokens`. Its structured inputs use
+**Content objects with `parts`, not the Interactions objects accepted by `chat`**:
+
+```ruby
+gemini.count_tokens(
+  [
+    { role: "user", parts: [{ text: "Hello" }] },
+    { role: "model", parts: [{ text: "Hi!" }] },
+    { role: "user", parts: [{ text: "Tell me more." }] }
+  ],
+  instructions: "Be concise."
+)
+```
+
+A single Gemini Content hash is also accepted. Media uses native `inlineData`
+or `fileData` parts; the helper does not read or upload local files. Supply
+conversation history explicitly: Gemini counting does not resolve
+`previous_response_id` or `previous_interaction_id`. Preflight counts can differ
+from a later generation's reported usage.
+
+`options:` passes native counting API fields. OpenAI tool definitions go in
+`options: { tools: [...] }`; Gemini tool definitions go in
+`options: { generateContentRequest: { tools: [...] } }`. Gemini `instructions:`
+builds `generateContentRequest.systemInstruction`. The helper owns the model
+and input/contents fields; explicit keywords take precedence over matching
+options without mutating the caller's hashes. Native fields keep each API's
+spelling. Use the counting endpoint's options rather than copying every chat
+option. New methods are exposed on the provider classes; there is no legacy
+`AiLite.count_tokens` class shortcut.
+
+See [OpenAI's counting guide](https://developers.openai.com/api/docs/guides/token-counting)
+and [Gemini's counting API reference](https://ai.google.dev/api/tokens) for supported
+inputs and native parameters.
 
 ## Gemini
 
@@ -73,6 +242,9 @@ AiLite::Gemini.configure do |config|
   config.model = "gemini-3.8-flash"
   config.embedding_model = "gemini-embedding-001"
   config.image_model = "gemini-nano-banana-2.1"
+  config.speech_model = "gemini-3.8-flash-tts"
+  config.speech_voice = "Kore"
+  config.transcription_model = "gemini-3.5-transcribe"
   config.timeout = 120
   config.max_output_tokens = 2000
 end
@@ -104,8 +276,8 @@ OpenAI-style role/message arrays are not automatically translated.
 Multi-turn continuation uses the familiar keyword:
 
 ```ruby
-first = gemini.chat("My name is William.")
-second = gemini.chat("What is my name?", previous_response_id: first["response_id"])
+first = gemini.chat("My favorite color is blue.")
+second = gemini.chat("What is my favorite color?", previous_response_id: first["response_id"])
 ```
 
 `instructions:` maps to `system_instruction`; `previous_response_id:` maps to
@@ -127,12 +299,12 @@ and [API reference](https://ai.google.dev/api/interactions-api).
 Results use the standard `content`, `response_id`, `status`, `error`, and `raw`
 keys. Text is extracted only from `model_output` steps; JSON-looking text is
 parsed. `debug: true` retains the complete response, including non-text output,
-tool calls, and usage. Non-completed interactions (including `requires_action`)
-return an error rather than pretending the answer is complete; no tools are
+tool calls, and usage. `requires_action` with valid function calls returns
+`tool_calls` without an error. Other non-completed interactions return an error; no tools are
 executed automatically. Input/API/transport errors return an error envelope;
 constructing a client without a key raises `ArgumentError`.
 
-Gemini speech and file transcription methods are not implemented yet. Use `chat_stream` for streaming; `chat` rejects
+Use `chat_stream` for streaming; `chat` rejects
 `stream: true`. Both methods reject `background: true` before sending a request.
 Legacy `AiLite` entry points still use OpenAI.
 
@@ -198,6 +370,97 @@ Streaming and background execution are rejected. Failed/incomplete interactions,
 missing or invalid image data, and file-write errors return error envelopes.
 See Google's [image generation guide](https://ai.google.dev/gemini-api/docs/image-generation).
 
+### Gemini speech
+
+```ruby
+gemini = AiLite::Gemini.new
+result = gemini.speak("Hello from AI Lite.", output_path: "tmp/hello.wav")
+result["content"] # { "path" => "tmp/hello.wav", "bytes" => ..., "format" => "wav" }
+
+AiLite::Gemini.speak("Have a wonderful day!", voice: "Puck",
+                    instructions: "Speak warmly and calmly", base64: true)
+```
+
+`speak` returns binary audio by default. With `output_path:`, it saves the audio
+and returns path, byte count, and format. With `base64: true`, `content` is base64
+instead; a supplied output path is still written. Parent directories must exist.
+
+The defaults are `gemini-3.8-flash-tts`, voice `Kore`, and WAV output.
+Configure `speech_model` and `speech_voice` globally or in the constructor;
+`model:` and `voice:` override them per call. Model checks include the speech model.
+`instructions:` supplies speaking style through speech metadata.
+
+`response_format:` accepts `"wav"`, `"pcm"`, `"mulaw"`, or `"alaw"`.
+This helper saves decoded provider bytes without transcoding; a filename extension
+does not change the encoding. It does not support OpenAI's `speed:` or MP3 output.
+See Google's [speech guide](https://ai.google.dev/gemini-api/docs/speech-generation)
+for model-specific voices and formats.
+
+Native options remain available, for example:
+
+```ruby
+gemini.speak("Hello", response_format: "pcm", options: {
+  response_format: { sample_rate: 16000 },
+  store: false
+})
+```
+
+Explicit input, model, voice, and format take precedence. This single-speaker
+helper owns `generation_config.speech_config`; any supplied speech configuration
+is replaced with the selected voice. Other native generation settings pass through;
+the chat output-token limit is not added. Streaming/background requests are rejected.
+
+Only one inline audio block from completed model output is accepted. Missing,
+invalid, unsupported, or multiple audio blocks return errors before writing a file.
+`debug: true` includes the full provider response in `raw`, including audio and usage.
+The standard envelope includes the interaction's `response_id` when available.
+
+### Gemini transcription
+
+```ruby
+result = gemini.transcribe("tmp/gemini-speech-test.wav")
+result["content"] # Transcript as a string
+result["error"]   # nil on success
+
+# Class-level calls work too:
+AiLite::Gemini.transcribe("tmp/meeting.mp3")
+```
+
+The default model is `gemini-3.5-transcribe`. Set `transcription_model` in
+configuration or the constructor, or override it with `model:` per call.
+The helper reads a local audio file and sends base64 audio to the Interactions
+API. The complete JSON request must be under 20 MB, including base64 overhead
+(roughly 15 MB of audio, less any options). Larger requests return an error;
+this helper does not upload files through the Files API.
+
+The filename extension selects the MIME type for WAV, MP3, AIFF, AAC, OGG,
+FLAC, MPEG, M4A, L16/PCM, Opus, ALAW, MULAW, and WebM. Use `mime_type:` when
+needed, including parameters for raw PCM such as `audio/l16;rate=24000`.
+Audio is sent as supplied; the gem does not convert formats.
+
+Language detection is automatic. Pass provider-specific settings through `options:`:
+
+```ruby
+result = gemini.transcribe(
+  "tmp/meeting.wav",
+  options: {
+    generation_config: {
+      transcription_config: { language_codes: ["en-US"] }
+    }
+  },
+  debug: true
+)
+result["content"] # Plain transcript, even when the spoken text looks like JSON
+result["raw"]     # Full provider response, including available annotations
+```
+
+See Google's [transcription guide](https://ai.google.dev/gemini-api/docs/transcribe)
+for vocabulary hints, speaker labels, timestamps, and their compatibility rules.
+Unlike OpenAI's transcription helper, this method does not accept `language:` or
+`prompt:`; use native transcription settings instead. Streaming and background
+transcription are not supported. Failed or incomplete responses return an error
+in the standard envelope.
+
 ### Gemini model checks
 
 ```ruby
@@ -206,7 +469,7 @@ result = gemini.available_models
 puts result["content"] unless result["error"]
 
 gemini.model_available?("gemini-3.8-flash") # true / false / nil on lookup failure
-gemini.configured_models                  # Includes chat, embedding, and image models
+gemini.configured_models                  # Includes chat, embedding, image, speech, and transcription models
 gemini.check_configured_models            # Standard envelope containing a report
 
 # All four also work at class level:
@@ -776,7 +1039,7 @@ Use `base64: true` when you want text-safe audio data that can be transported in
 ```ruby
 result = ai.speak("Hello from AI Lite", base64: true)
 
-File.binwrite("tmp/hello.mp3", Base64.decode64(result["content"]))
+File.binwrite("tmp/hello.mp3", result["content"].unpack1("m0"))
 ```
 
 `speak` sends a `POST` request to `/v1/audio/speech` with:
@@ -793,6 +1056,10 @@ File.binwrite("tmp/hello.mp3", Base64.decode64(result["content"]))
 The default speech model is `gpt-4o-mini-tts`.
 The default speech voice is `alloy`.
 The default response format is `mp3`.
+
+For the current list of built-in voices and model-specific voice support, see
+[OpenAI's text-to-speech guide](https://developers.openai.com/api/docs/guides/text-to-speech).
+AI Lite does not expose an OpenAI `available_voices` method.
 
 Set `voice` per call when you want a different built-in voice:
 
@@ -1001,7 +1268,21 @@ result = ai.chat("Say hello", debug: true)
 
 ## Development
 
-Run the test suite:
+Compatibility CI runs the full suite on Ruby 2.6, 2.7, 3.0, 3.1, 3.2, 3.3,
+3.4, and 4.0. Tests include building and installing the gem in isolation and
+loading both providers without third-party runtime gems. These are Ruby tests;
+they do not constitute a Rails integration matrix.
+
+Install the test dependency (not a runtime dependency):
+
+```sh
+# Ruby 2.6–3.4
+gem install minitest --version 5.15.0 --no-document
+# Ruby 4.0
+gem install minitest --version 5.27.0 --no-document
+```
+
+Run the test suite from the repository root:
 
 ```sh
 ruby -Ilib:test test/run.rb
