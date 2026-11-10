@@ -26,7 +26,7 @@ class PackageTest < Minitest::Test
                                      "--local", "--install-dir", installed, "--no-document", "--ignore-dependencies")
       assert status.success?, output
 
-      %w[ai_lite ai_lite/openai ai_lite/gemini].each do |entry|
+      %w[ai_lite ai_lite/openai ai_lite/gemini ai_lite/claude].each do |entry|
         output, status = Open3.capture2e(
           { "GEM_HOME" => installed, "GEM_PATH" => installed, "RUBYLIB" => nil, "RUBYOPT" => nil },
           RbConfig.ruby, "-e", <<~'RUBY', entry, installed, chdir: dir
@@ -34,13 +34,14 @@ class PackageTest < Minitest::Test
             spec = Gem.loaded_specs.fetch("ai-lite")
             abort "Loaded outside isolated installation" unless File.realpath(spec.full_gem_path).start_with?(File.realpath(ARGV.fetch(1)) + "/")
             abort "Unexpected runtime dependencies" unless spec.runtime_dependencies.empty?
-            [:OpenAI, :Gemini].each do |name|
+            [:OpenAI, :Gemini, :Claude].each do |name|
               next unless AiLite.const_defined?(name, false)
               client = AiLite.const_get(name).new(api_key: "package-test-key")
-              [:chat, :chat_stream, :embed, :image, :speak, :transcribe, :count_tokens, :configured_models].each do |method|
+              methods = name == :Claude ? [:chat] : [:chat, :chat_stream, :embed, :image, :speak, :transcribe, :count_tokens, :configured_models]
+              methods.each do |method|
                 abort "Missing #{name}.#{method}" unless client.respond_to?(method)
               end
-              abort "Missing chat model" unless client.configured_models["chat"]
+              abort "Missing chat model" unless client.model
             end
           RUBY
         )

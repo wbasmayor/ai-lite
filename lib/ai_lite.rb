@@ -1,6 +1,7 @@
 require_relative "ai_lite/version"
 require_relative "ai_lite/openai"
 require_relative "ai_lite/gemini"
+require_relative "ai_lite/claude"
 
 class AiLite
   # Preserve previously public constants while ownership stays with OpenAI.

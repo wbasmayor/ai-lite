@@ -1,12 +1,19 @@
 # AI Lite
 
-AI Lite is a lightweight, pure Ruby client for OpenAI and Gemini. Both providers
-support chat, streaming, embeddings, image generation, speech, transcription, token counting, and model availability
-checks through simple interfaces and a consistent result format.
+AI Lite is a lightweight, pure Ruby client for OpenAI, Gemini, and Claude, built
+entirely on the Ruby standard library with no runtime gem dependencies.
 
-It is built for Rails apps and plain Ruby projects that need AI features with
-minimal dependencies. It is especially useful in legacy Rails apps where Ruby,
-Rails, or HTTP-client dependency constraints make larger SDKs difficult to add.
+OpenAI and Gemini support chat, streaming, function calling, embeddings, image
+generation, speech, transcription, token counting, and model availability checks.
+Claude currently supports synchronous chat and explicit message history through
+the same consistent result format. Claude support is unreleased and planned for
+v1.3.0; the published v1.2.0 gem supports OpenAI and Gemini.
+
+Built for Rails apps and plain Ruby projects that want straightforward AI
+integration without a larger SDK or framework. AI Lite handles the API calls
+while you control your application's architecture.
+
+Supports Ruby 2.6 through 4.0, with no Rails dependency or runtime gem dependencies.
 
 This gem is intentionally small:
 
@@ -22,9 +29,11 @@ require "ai_lite"
 
 openai = AiLite::OpenAI.new # Reads OPENAI_API_KEY
 gemini = AiLite::Gemini.new # Reads GEMINI_API_KEY
+claude = AiLite::Claude.new # Reads ANTHROPIC_API_KEY; unreleased
 
 openai.chat("Say hello")
 gemini.chat("Say hello")
+claude.chat("Say hello")
 
 openai.embed("Text to vectorize")
 gemini.embed("Text to vectorize")
@@ -39,18 +48,85 @@ media input and a YouTube helper. The table below lists the available methods.
 
 ## Provider support
 
-| Method | OpenAI | Gemini |
-| --- | --- | --- |
-| `chat`, `chat_stream`, `count_tokens` | Yes | Yes |
-| Four model helpers | Yes | Yes |
-| `youtube` | No | Yes |
-| `embed`, `image`, `speak`, `transcribe` | Yes | Yes |
-| `moderate` | Yes | Not implemented |
+| Method | OpenAI | Gemini | Claude (unreleased) |
+| --- | --- | --- | --- |
+| `chat` | Yes | Yes | Yes; tool helpers pending |
+| `chat_stream`, `count_tokens` | Yes | Yes | Not implemented |
+| Four model helpers | Yes | Yes | Not implemented |
+| `youtube` | No | Yes | Not implemented |
+| `embed`, `image`, `speak`, `transcribe` | Yes | Yes | Not implemented |
+| `moderate` | Yes | Not implemented | Not implemented |
 
 Unsupported provider methods are absent and raise Ruby's `NoMethodError` if called.
 Configure providers during application startup; do not mutate shared configuration
 or client headers while requests are running. The gem does not provide automatic
 retries, worker threads, or a background-job queue.
+
+## Claude groundwork (unreleased)
+
+The working tree adds `AiLite::Claude` with synchronous chat and explicit message
+history. This is the first part of planned v1.3.0 support; it is not included in
+the published v1.2.0 gem. Claude streaming, normalized tool calls/results, token
+counting, and model helpers are still pending.
+
+```ruby
+require "ai_lite/claude" # Also loaded by require "ai_lite"
+
+claude = AiLite::Claude.new # Reads ANTHROPIC_API_KEY; does not load .env
+result = claude.chat("Hello", max_output_tokens: 32,
+                     options: { thinking: { type: "disabled" }, output_config: { effort: "low" } })
+raise result["error"] if result["error"]
+puts result["content"]
+```
+
+Defaults: `claude-haiku-5-5`, API version `2026-10-21`, 120-second timeout, and
+2,000 maximum output tokens. Thinking settings are provider defaults unless
+supplied through `options:`. The short example disables thinking and limits output
+for inexpensive development checks; those options depend on the selected model.
+
+```ruby
+AiLite::Claude.configure do |config|
+  config.api_key = ENV["ANTHROPIC_API_KEY"]
+  config.model = "claude-haiku-5-5"
+  config.max_output_tokens = 256
+  # config.workspace_id = "wrkspc_..." # For keys that require workspace selection
+end
+AiLite::Claude.chat("Hello")
+```
+
+Constructor keywords override configuration, and `api_key:` falls back to
+`ANTHROPIC_API_KEY`. Other providers' keys are never used. `api_version` and
+`workspace_id` are configurable in both places. Missing credentials raise
+`ArgumentError`; request, transport, and response failures use the normal error
+envelope. `instructions:` maps to `system`, and `max_output_tokens:` maps to
+`max_tokens`. Native options pass through without mutating the caller's hashes.
+
+Claude's standard Messages API requires history on each turn:
+
+```ruby
+history = [{ role: "user", content: "My favorite color is blue." }]
+first = claude.chat(history)
+raise first["error"] if first["error"]
+history << first["assistant_message"]
+history << { role: "user", content: "What is my favorite color?" }
+second = claude.chat(history)
+```
+
+The usual envelope is preserved, with `assistant_message` added for replay.
+It contains the original assistant content blocks, including any thinking blocks
+and signatures, even when `raw` is nil. Treat it as provider conversation data;
+`content` remains the displayable text (or parsed JSON). `response_id` identifies
+the message but cannot continue the conversation: `previous_response_id:` returns
+an error. No conversation is stored inside the client.
+
+Use `debug: true` for the full native response and usage. Truncation, refusals,
+paused turns, and tool requests currently return a descriptive error while
+preserving available text and assistant content. Only `end_turn` and
+`stop_sequence` are handled as completed answers in this initial implementation.
+Do not treat HTTP 200 alone as success. Native content blocks can be supplied in
+message arrays; the gem does not upload or convert media.
+
+Reference: [Claude Messages API](https://platform.claude.com/docs/en/api/messages/create).
 
 ## Function calling (OpenAI and Gemini)
 

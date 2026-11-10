@@ -4,11 +4,13 @@ Gem::Specification.new do |spec|
   spec.name = "ai-lite"
   spec.version = AiLite::VERSION
   spec.authors = ["William Basmayor"]
-  spec.summary = "Lightweight Ruby client with separate OpenAI and Gemini providers."
+  spec.summary = "Lightweight Ruby client for OpenAI, Gemini, and Claude."
   spec.description = <<~DESCRIPTION.strip
-    AI Lite is a lightweight Ruby client for OpenAI and Gemini, built for Rails apps and plain Ruby projects. It uses only Ruby's standard library and has no runtime gem dependencies.
+    AI Lite is a lightweight Ruby client for OpenAI, Gemini, and Claude, built for Rails apps and plain Ruby projects. It uses only Ruby's standard library and has no runtime gem dependencies.
 
-    Both providers support chat, streaming, function calling, embeddings, image generation, speech, transcription, token counting, and model checks. OpenAI also supports moderation. Gemini also supports structured media inputs and a YouTube helper.
+    AI Lite handles the API calls while you control your application's architecture, providing straightforward AI integration without a larger SDK or framework. Supports Ruby 2.6 through 4.0 with no Rails dependency.
+
+    OpenAI and Gemini support chat, streaming, function calling, embeddings, image generation, speech, transcription, token counting, and model checks. OpenAI also supports moderation. Gemini also supports structured media inputs and a YouTube helper. Claude supports synchronous chat and explicit message history.
   DESCRIPTION
   spec.homepage = "https://github.com/wbasmayor/ai-lite"
   spec.license = "MIT"

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Begin Claude support with independent configuration, stdlib Messages transport,
+  synchronous chat, explicit history, replayable assistant messages, and tests.
+  Streaming, tool helpers, token counting, and model helpers remain pending.
+
 ## 1.2.0 (2026-11-02)
 
 - Add `tools:` and `tool_results:` to OpenAI and Gemini chat and streaming,
