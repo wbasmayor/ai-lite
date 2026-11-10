@@ -6,8 +6,7 @@ entirely on the Ruby standard library with no runtime gem dependencies.
 OpenAI and Gemini support chat, streaming, function calling, embeddings, image
 generation, speech, transcription, token counting, and model availability checks.
 Claude currently supports synchronous chat and explicit message history through
-the same consistent result format. Claude support is unreleased and planned for
-v1.3.0; the published v1.2.0 gem supports OpenAI and Gemini.
+the same consistent result format. Claude support is available starting in v1.3.0.
 
 Built for Rails apps and plain Ruby projects that want straightforward AI
 integration without a larger SDK or framework. AI Lite handles the API calls
@@ -29,7 +28,7 @@ require "ai_lite"
 
 openai = AiLite::OpenAI.new # Reads OPENAI_API_KEY
 gemini = AiLite::Gemini.new # Reads GEMINI_API_KEY
-claude = AiLite::Claude.new # Reads ANTHROPIC_API_KEY; unreleased
+claude = AiLite::Claude.new # Reads ANTHROPIC_API_KEY
 
 openai.chat("Say hello")
 gemini.chat("Say hello")
@@ -48,7 +47,7 @@ media input and a YouTube helper. The table below lists the available methods.
 
 ## Provider support
 
-| Method | OpenAI | Gemini | Claude (unreleased) |
+| Method | OpenAI | Gemini | Claude |
 | --- | --- | --- | --- |
 | `chat` | Yes | Yes | Yes; tool helpers pending |
 | `chat_stream`, `count_tokens` | Yes | Yes | Not implemented |
@@ -62,11 +61,10 @@ Configure providers during application startup; do not mutate shared configurati
 or client headers while requests are running. The gem does not provide automatic
 retries, worker threads, or a background-job queue.
 
-## Claude groundwork (unreleased)
+## Claude
 
-The working tree adds `AiLite::Claude` with synchronous chat and explicit message
-history. This is the first part of planned v1.3.0 support; it is not included in
-the published v1.2.0 gem. Claude streaming, normalized tool calls/results, token
+`AiLite::Claude` supports synchronous chat and explicit message history starting
+in v1.3.0. Claude streaming, normalized tool calls/results, token
 counting, and model helpers are still pending.
 
 ```ruby
@@ -83,6 +81,20 @@ Defaults: `claude-haiku-5-5`, API version `2026-10-21`, 120-second timeout, and
 2,000 maximum output tokens. Thinking settings are provider defaults unless
 supplied through `options:`. The short example disables thinking and limits output
 for inexpensive development checks; those options depend on the selected model.
+
+The example above uses the default Haiku model. For `claude-sonnet-5-5`, use
+`thinking: { type: "between_tools" }` instead of `disabled`:
+
+```ruby
+result = claude.chat("Reply only OK.", model: "claude-sonnet-5-5",
+                     max_output_tokens: 32,
+                     options: { thinking: { type: "between_tools" }, output_config: { effort: "low" } })
+raise result["error"] if result["error"]
+puts result["content"]
+```
+
+AI Lite passes these native options through to Claude; it does not translate
+thinking settings between models. The API returns an error for unsupported settings.
 
 ```ruby
 AiLite::Claude.configure do |config|

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 (2026-11-10)
 
 - Begin Claude support with independent configuration, stdlib Messages transport,
   synchronous chat, explicit history, replayable assistant messages, and tests.
