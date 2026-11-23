@@ -16,16 +16,17 @@ class TokenCountingTest < Minitest::Test
   end
 
   def setup
-    [AiLite::OpenAI, AiLite::Gemini].each(&:reset_configuration!)
+    [AiLite::OpenAI, AiLite::Gemini, AiLite::Claude].each(&:reset_configuration!)
   end
 
   def teardown
-    [AiLite::OpenAI, AiLite::Gemini].each(&:reset_configuration!)
+    [AiLite::OpenAI, AiLite::Gemini, AiLite::Claude].each(&:reset_configuration!)
   end
 
   def providers
     [[AiLite::OpenAI, "input_tokens", "api.openai.com", "/v1/responses/input_tokens"],
-     [AiLite::Gemini, "totalTokens", "generativelanguage.googleapis.com", "/v1beta/models/chosen:countTokens"]]
+     [AiLite::Gemini, "totalTokens", "generativelanguage.googleapis.com", "/v1beta/models/chosen:countTokens"],
+     [AiLite::Claude, "input_tokens", "api.anthropic.com", "/v1/messages/count_tokens"]]
   end
 
   def with_http(raw, code = "200")
@@ -59,6 +60,11 @@ class TokenCountingTest < Minitest::Test
           assert_equal "Bearer provider-key", http.request_received["Authorization"]
           assert_nil http.request_received["x-goog-api-key"]
           assert_equal({ "model" => "chosen", "input" => "Hello" }, payload)
+        elsif provider == AiLite::Claude
+          assert_equal "Bearer provider-key", http.request_received["Authorization"]
+          assert_equal client.api_version, http.request_received["anthropic-version"]
+          assert_nil http.request_received["x-goog-api-key"]
+          assert_equal({ "model" => "chosen", "messages" => [{ "role" => "user", "content" => "Hello" }] }, payload)
         else
           assert_equal "provider-key", http.request_received["x-goog-api-key"]
           assert_nil http.request_received["Authorization"]
@@ -77,7 +83,7 @@ class TokenCountingTest < Minitest::Test
         assert_equal 0, result["content"]
         assert_nil result["error"]
         assert_equal({ field => 0, "details" => { "cached" => 0 } }, result["raw"])
-        if provider == AiLite::OpenAI
+        if provider != AiLite::Gemini
           assert_equal "override", JSON.parse(http.request_received.body)["model"]
         else
           assert_equal "/v1beta/models/override:countTokens", http.request_received.path
@@ -170,4 +176,46 @@ class TokenCountingTest < Minitest::Test
       assert_nil http.request_received
     end
   end
+  def test_claude_native_history_tools_and_options_without_mutation
+    client = AiLite::Claude.new(api_key: "key", workspace_id: "workspace")
+    input = [{ role: "user", content: [{ type: "image", source: { type: "url", url: "https://example.com/a.png" } }] },
+             { role: "assistant", content: [{ type: "thinking", thinking: "reason", signature: "sig" },
+               { type: "tool_use", id: "a", name: "lookup", input: {} }] },
+             { role: "user", content: [{ type: "tool_result", tool_use_id: "a", content: "done" },
+               { type: "document", source: { type: "text", media_type: "text/plain", data: "Document" } }] }]
+    options = { "model" => "ignored", messages: [], system: "ignored",
+                tools: [{ name: "lookup", input_schema: { type: "object" } }],
+                thinking: { type: "disabled" } }
+    before = Marshal.dump([input, options])
+    with_http({ "input_tokens" => 100 }) do |http|
+      result = client.count_tokens(input, model: "selected", instructions: "Be concise", options: options)
+      assert_nil result["error"]
+      assert_equal "workspace", http.request_received["anthropic-workspace-id"]
+      payload = JSON.parse(http.request_received.body)
+      assert_equal "selected", payload["model"]
+      assert_equal "Be concise", payload["system"]
+      assert_equal JSON.parse(JSON.generate(input)), payload["messages"]
+      assert_equal "lookup", payload["tools"][0]["name"]
+      assert_equal({ "type" => "disabled" }, payload["thinking"])
+      refute payload.key?("max_tokens")
+      refute payload.key?("stream")
+      client.count_tokens("Hi", options: { system: [{ type: "text", text: "Native" }] })
+      assert_equal [{ "type" => "text", "text" => "Native" }], JSON.parse(http.request_received.body)["system"]
+    end
+    assert_equal before, Marshal.dump([input, options])
+  end
+
+  def test_claude_invalid_history_and_response_ids_do_not_send_requests
+    client = AiLite::Claude.new(api_key: "key")
+    with_http(RuntimeError.new("Unexpected request")) do |http|
+      [[], {}, [{ role: "user" }], [{ role: "invalid", content: "Hi" }]].each do |input|
+        refute_nil client.count_tokens(input)["error"]
+      end
+      [:previous_response_id, "previous_interaction_id"].each do |key|
+        assert_match(/explicit message history/, client.count_tokens("Hi", options: { key => "id" })["error"])
+      end
+      assert_nil http.request_received
+    end
+  end
+
 end

@@ -5,8 +5,8 @@ entirely on the Ruby standard library with no runtime gem dependencies.
 
 OpenAI and Gemini support chat, streaming, function calling, embeddings, image
 generation, speech, transcription, token counting, and model availability checks.
-Claude currently supports synchronous chat and explicit message history through
-the same consistent result format. Claude support is available starting in v1.3.0.
+Claude supports synchronous and streaming chat with explicit message history through
+the same consistent result format. Claude chat is available starting in v1.3.0; the additional Claude helpers ship in v1.4.0.
 
 Built for Rails apps and plain Ruby projects that want straightforward AI
 integration without a larger SDK or framework. AI Lite handles the API calls
@@ -43,112 +43,260 @@ gemini.image("A simple app icon")
 
 Each provider has independent configuration and native API options. OpenAI also
 supports moderation; Gemini supports structured
-media input and a YouTube helper. The table below lists the available methods.
+media input and a YouTube helper. The provider support table lists the available methods.
+
+## Table of contents
+
+- [Installation](#installation)
+- [Provider support](#provider-support)
+- [OpenAI](#openai)
+  - [OpenAI usage](#openai-usage)
+  - [OpenAI configuration](#openai-configuration)
+  - [OpenAI chat](#openai-chat)
+  - [OpenAI streaming](#openai-streaming)
+  - [OpenAI function calling](#openai-function-calling)
+  - [OpenAI token counting](#openai-token-counting)
+  - [OpenAI moderation](#openai-moderation)
+  - [OpenAI embeddings](#openai-embeddings)
+  - [OpenAI images](#openai-images)
+  - [OpenAI speech](#openai-speech)
+  - [OpenAI transcription](#openai-transcription)
+  - [OpenAI model availability](#openai-model-availability)
+- [Gemini](#gemini)
+  - [Gemini usage](#gemini-usage)
+  - [Gemini configuration](#gemini-configuration)
+  - [Gemini chat](#gemini-chat)
+  - [Gemini streaming](#gemini-streaming)
+  - [Gemini function calling](#gemini-function-calling)
+  - [Gemini token counting](#gemini-token-counting)
+  - [Gemini embeddings](#gemini-embeddings)
+  - [Gemini image generation](#gemini-image-generation)
+  - [Gemini speech](#gemini-speech)
+  - [Gemini transcription](#gemini-transcription)
+  - [Gemini model checks](#gemini-model-checks)
+  - [YouTube helper](#youtube-helper)
+- [Claude](#claude)
+  - [Claude chat](#claude-chat)
+  - [Claude configuration](#claude-configuration)
+  - [Claude message history](#claude-message-history)
+  - [Claude streaming](#claude-streaming)
+  - [Claude function calling](#claude-function-calling)
+  - [Claude token counting](#claude-token-counting)
+  - [Claude model checks](#claude-model-checks)
+  - [Claude image and PDF inputs](#claude-image-and-pdf-inputs)
+- [Shared return format](#shared-return-format)
+- [Migrating to provider namespaces](#migrating-to-provider-namespaces)
+- [Development](#development)
+
+## Installation
+
+Add AI Lite to your Gemfile:
+
+```ruby
+gem "ai-lite"
+```
+
+Then run `bundle install`. For plain Ruby projects, use `gem install ai-lite`.
+Set the API key for the provider you use: `OPENAI_API_KEY`, `GEMINI_API_KEY`, or
+`ANTHROPIC_API_KEY`. The gem does not load `.env` automatically.
 
 ## Provider support
 
 | Method | OpenAI | Gemini | Claude |
 | --- | --- | --- | --- |
-| `chat` | Yes | Yes | Yes; tool helpers pending |
-| `chat_stream`, `count_tokens` | Yes | Yes | Not implemented |
-| Four model helpers | Yes | Yes | Not implemented |
+| `chat` | Yes | Yes | Yes |
+| `chat_stream` | Yes | Yes | Yes |
+| `count_tokens` | Yes | Yes | Yes |
+| Four model helpers | Yes | Yes | Yes |
 | `youtube` | No | Yes | Not implemented |
 | `embed`, `image`, `speak`, `transcribe` | Yes | Yes | Not implemented |
 | `moderate` | Yes | Not implemented | Not implemented |
+| `image_input`, `pdf_input` block helpers | No | No | Yes |
 
 Unsupported provider methods are absent and raise Ruby's `NoMethodError` if called.
 Configure providers during application startup; do not mutate shared configuration
 or client headers while requests are running. The gem does not provide automatic
 retries, worker threads, or a background-job queue.
 
-## Claude
+## OpenAI
 
-`AiLite::Claude` supports synchronous chat and explicit message history starting
-in v1.3.0. Claude streaming, normalized tool calls/results, token
-counting, and model helpers are still pending.
+### OpenAI usage
 
 ```ruby
-require "ai_lite/claude" # Also loaded by require "ai_lite"
+require "ai_lite"
 
-claude = AiLite::Claude.new # Reads ANTHROPIC_API_KEY; does not load .env
-result = claude.chat("Hello", max_output_tokens: 32,
-                     options: { thinking: { type: "disabled" }, output_config: { effort: "low" } })
-raise result["error"] if result["error"]
+ai = AiLite::OpenAI.new
+result = ai.chat("Say hello")
+
 puts result["content"]
 ```
 
-Defaults: `claude-haiku-5-5`, API version `2026-10-21`, 120-second timeout, and
-2,000 maximum output tokens. Thinking settings are provider defaults unless
-supplied through `options:`. The short example disables thinking and limits output
-for inexpensive development checks; those options depend on the selected model.
+By default, the client looks for an API key in `OPENAI_API_KEY`, then falls back to `OPEN_AI_TOKEN`.
 
-The example above uses the default Haiku model. For `claude-sonnet-5-5`, use
-`thinking: { type: "between_tools" }` instead of `disabled`:
+You can also pass the key directly:
 
 ```ruby
-result = claude.chat("Reply only OK.", model: "claude-sonnet-5-5",
-                     max_output_tokens: 32,
-                     options: { thinking: { type: "between_tools" }, output_config: { effort: "low" } })
-raise result["error"] if result["error"]
-puts result["content"]
+ai = AiLite::OpenAI.new(api_key: "sk-...")
 ```
 
-AI Lite passes these native options through to Claude; it does not translate
-thinking settings between models. The API returns an error for unsupported settings.
+### OpenAI configuration
+
+In Rails, configure the default client from an initializer:
 
 ```ruby
-AiLite::Claude.configure do |config|
-  config.api_key = ENV["ANTHROPIC_API_KEY"]
-  config.model = "claude-haiku-5-5"
-  config.max_output_tokens = 256
-  # config.workspace_id = "wrkspc_..." # For keys that require workspace selection
+# config/initializers/ai_lite.rb
+AiLite::OpenAI.configure do |config|
+  config.api_key = ENV["OPENAI_API_KEY"]
+  config.model = "gpt-5.5"
+  config.moderation_model = "omni-moderation-latest"
+  config.embedding_model = "text-embedding-3-small"
+  config.image_model = "gpt-image-2"
+  config.speech_model = "gpt-4o-mini-tts"
+  config.speech_voice = "alloy"
+  config.transcription_model = "gpt-transcribe"
+  config.timeout = 120
+  config.max_output_tokens = 2000
 end
-AiLite::Claude.chat("Hello")
 ```
 
-Constructor keywords override configuration, and `api_key:` falls back to
-`ANTHROPIC_API_KEY`. Other providers' keys are never used. `api_version` and
-`workspace_id` are configurable in both places. Missing credentials raise
-`ArgumentError`; request, transport, and response failures use the normal error
-envelope. `instructions:` maps to `system`, and `max_output_tokens:` maps to
-`max_tokens`. Native options pass through without mutating the caller's hashes.
+Any value left unset falls back to AI Lite's default:
 
-Claude's standard Messages API requires history on each turn:
+- `model`: `gpt-5.5`
+- `moderation_model`: `omni-moderation-latest`
+- `embedding_model`: `text-embedding-3-small`
+- `image_model`: `gpt-image-2`
+- `speech_model`: `gpt-4o-mini-tts`
+- `speech_voice`: `alloy`
+- `transcription_model`: `gpt-transcribe`
+- `timeout`: `120`
+- `max_output_tokens`: `2000`
+
+`timeout` is applied to both the HTTP connection timeout and the HTTP read timeout.
+
+Then use the configured singleton-style client:
 
 ```ruby
-history = [{ role: "user", content: "My favorite color is blue." }]
-first = claude.chat(history)
-raise first["error"] if first["error"]
-history << first["assistant_message"]
-history << { role: "user", content: "What is my favorite color?" }
-second = claude.chat(history)
+result = AiLite::OpenAI.chat("Say hello")
 ```
 
-The usual envelope is preserved, with `assistant_message` added for replay.
-It contains the original assistant content blocks, including any thinking blocks
-and signatures, even when `raw` is nil. Treat it as provider conversation data;
-`content` remains the displayable text (or parsed JSON). `response_id` identifies
-the message but cannot continue the conversation: `previous_response_id:` returns
-an error. No conversation is stored inside the client.
+You can still instantiate a separate client for another token:
 
-Use `debug: true` for the full native response and usage. Truncation, refusals,
-paused turns, and tool requests currently return a descriptive error while
-preserving available text and assistant content. Only `end_turn` and
-`stop_sequence` are handled as completed answers in this initial implementation.
-Do not treat HTTP 200 alone as success. Native content blocks can be supplied in
-message arrays; the gem does not upload or convert media.
+```ruby
+client = AiLite::OpenAI.new(api_key: "sk-other-token")
+result = client.chat("Say hello")
+```
 
-Reference: [Claude Messages API](https://platform.claude.com/docs/en/api/messages/create).
+### OpenAI chat
 
-## Function calling (OpenAI and Gemini)
+```ruby
+result = ai.chat(
+  "Return JSON confirming whether this is valid.",
+  instructions: "Return only minified JSON.",
+  max_output_tokens: 500,
+  options: {
+    text: { verbosity: "low" }
+  }
+)
+```
+
+`chat` sends a `POST` request to `/v1/responses` with:
+
+- `model`
+- `input`
+- `max_output_tokens`
+- optional `instructions`
+- optional `previous_response_id`
+- optional `debug`
+- optional extra `options`
+
+The default model is `gpt-5.5`.
+
+The OpenAI API URL is fixed to `https://api.openai.com/v1/responses`.
+
+#### Message-Array Input
+
+For a conversation with multiple input messages, pass an array using the OpenAI Responses API message shape:
+
+```ruby
+result = ai.chat([
+  { role: "developer", content: "Be concise." },
+  { role: "user", content: "Explain dependency injection." }
+])
+```
+
+AI Lite sends the array unchanged as `input`, so you can also use richer Responses API content items when needed.
+
+#### Multi-Turn Chat
+
+Responses include a `response_id`. Pass it to the next call as `previous_response_id` to continue the conversation:
+
+```ruby
+first = ai.chat("Tell me a short joke.")
+
+follow_up = ai.chat(
+  "Explain why that is funny.",
+  previous_response_id: first["response_id"]
+)
+
+puts follow_up["content"]
+```
+
+Passing `previous_response_id` through `options` remains supported for backward compatibility.
+
+### OpenAI streaming
+
+Use `chat_stream` to receive text as it arrives. It accepts the same keywords as
+`chat`, requires a block, and returns the usual result envelope when the stream
+finishes.
+
+```ruby
+ai = AiLite::OpenAI.new
+
+result = ai.chat_stream("Explain Ruby blocks in three sentences.") do |text|
+  print text
+  $stdout.flush
+end
+puts
+
+warn result["error"] if result["error"]
+# result["content"] contains the final answer.
+# result["response_id"] can be passed as previous_response_id on the next call.
+```
+
+Class-level usage is also supported:
+
+```ruby
+AiLite::OpenAI.chat_stream("Say hello") { |text| print text }
+```
+
+The block receives text strings, which are not necessarily whole words or tokens.
+JSON-looking final output is parsed in the returned `content`, just like `chat`;
+the block still receives the original text fragments. With `debug: true`, `raw`
+contains the terminal response object (or the available error/last event on failure),
+not a history of every streaming event. Tool arguments, reasoning, and refusal
+events are not yielded as text; the terminal response retains these outputs in
+`raw` when debugging. See the [OpenAI streaming event reference](https://developers.openai.com/api/reference/resources/responses/streaming-events).
+
+Always check `result["error"]`: failed, incomplete, malformed, or disconnected
+streams return an error, retaining text already received when available. An HTTP
+status of `200` alone does not mean generation completed successfully. Exceptions
+raised by your block propagate to the caller; calling without a block raises
+`ArgumentError` before making a request.
+
+Streaming runs in the calling thread and creates no worker threads. In Rails,
+forwarding chunks to a browser still requires an appropriate streaming response
+or messaging mechanism in the application. The configured read timeout applies
+to individual network reads, not to the total generation duration.
+
+### OpenAI function calling
 
 Pass native tool definitions through `tools:` on `chat` or `chat_stream`.
-Both providers accept the basic function definition below. Provider-specific
-fields and built-in tools retain their native formats; `options:` remains the
+OpenAI accepts the basic function definition below. Native
+fields and built-in tools retain their formats; `options:` remains the
 escape hatch for settings such as tool choice.
 
 ```ruby
-ai = AiLite::Gemini.new # Or AiLite::OpenAI.new
+ai = AiLite::OpenAI.new
 
 tools = [{
   type: "function",
@@ -175,8 +323,7 @@ raise result["error"] if result["error"]
 A tool request is a successful chat result. `content` may be nil or contain text
 alongside tool calls. The `tool_calls` key appears only when complete function
 calls are present; existing text-only envelopes are unchanged. OpenAI call IDs
-come from `call_id`, not the output item's `id`. Gemini IDs come from the
-function-call step's `id`. Arguments are decoded into hashes without requiring
+come from `call_id`, not the output item's `id`. Arguments are decoded into hashes without requiring
 `debug: true`. Failed/incomplete responses do not expose executable tool calls.
 
 Your application validates arguments, authorizes access, and executes only
@@ -210,8 +357,7 @@ puts result["content"]
 `tool_results:` takes a nonempty array of `{ id:, name:, output: }` hashes,
 requires `previous_response_id:`, and uses `nil` as the positional message.
 Strings are sent as text; other JSON-compatible outputs are JSON-encoded.
-The helper translates results into OpenAI `function_call_output` items or
-Gemini `function_result` steps. Return a result for every requested call and
+The helper translates results into OpenAI `function_call_output` items. Return a result for every requested call and
 reuse the same provider/model and tool definitions. IDs refer to stored provider
 state; when using stateless requests, pass native history/results as the
 positional input instead. Preserve all provider-required history, including
@@ -222,7 +368,7 @@ streaming debug output may contain partial metadata plus events.
 `chat_stream` accepts the same tool keywords. Its block still receives text
 only; complete tool calls are returned in the final envelope after streaming.
 Do not execute streamed argument fragments. Class-level calls work too:
-`AiLite::OpenAI.chat(...)` and `AiLite::Gemini.chat(...)`.
+`AiLite::OpenAI.chat(...)`.
 
 Explicit `tools:` overrides `options[:tools]`, including `tools: []` to clear
 it. AI Lite does not execute functions, dispatch method names, retry tool calls,
@@ -230,29 +376,23 @@ or run an automatic agent loop. Built-in provider tools are passed through;
 only custom `function_call` outputs are normalized into `tool_calls`.
 
 See the [OpenAI function-calling guide](https://developers.openai.com/api/docs/guides/function-calling)
-and [Gemini function-calling guide](https://ai.google.dev/gemini-api/docs/function-calling)
 for native schemas and continuation requirements.
 
-## Token counting (both providers)
+### OpenAI token counting
 
 ```ruby
 openai = AiLite::OpenAI.new
-gemini = AiLite::Gemini.new
-
 result = openai.count_tokens("Hello from AI Lite.")
 result["content"] # Integer input-token count when error is nil
 result["error"]   # nil on success
 
-gemini.count_tokens("Hello from AI Lite.", instructions: "Be concise.")
-
-# Class-level methods use each provider's independent configuration:
-AiLite::OpenAI.count_tokens("Hello")
-AiLite::Gemini.count_tokens("Hello")
+# Uses this provider's independent configuration:
+AiLite::OpenAI.count_tokens("Hello", instructions: "Be concise.")
 ```
 
 These are authenticated HTTP calls, not offline tokenizers. They count input
 only, without generating an answer or predicting output tokens or a final bill.
-Counts depend on the model and the supplied context. Both use the configured
+Counts depend on the model and the supplied context. The helper uses the configured
 chat `model` by default; pass `model:` to override it. No tokenizer gem is needed.
 The standard envelope contains an integer `content`, a nil `response_id`, and
 `raw` only with `debug: true`. Check `error` before using the count; zero is a
@@ -275,41 +415,450 @@ openai.count_tokens(
 openai.count_tokens("Tell me more.", previous_response_id: previous_result["response_id"])
 ```
 
-Gemini uses `POST /v1beta/models/{model}:countTokens`. Its structured inputs use
-**Content objects with `parts`, not the Interactions objects accepted by `chat`**:
+`options:` passes native counting API fields. Tool definitions go in
+`options: { tools: [...] }`.
+
+The helper owns the model and input fields; explicit keywords take precedence
+without mutating the caller's hashes. Use the counting endpoint's native options
+rather than copying every chat option. There is no legacy `AiLite.count_tokens`
+class shortcut.
+
+See [OpenAI’s counting guide](https://developers.openai.com/api/docs/guides/token-counting)
+for supported inputs and native parameters.
+
+### OpenAI moderation
+
+Use `moderate` to classify user-submitted text or images for potentially harmful content before saving, publishing, or sending it into another AI call.
+
+A common use case is checking a comment before it is shown publicly:
 
 ```ruby
-gemini.count_tokens(
-  [
-    { role: "user", parts: [{ text: "Hello" }] },
-    { role: "model", parts: [{ text: "Hi!" }] },
-    { role: "user", parts: [{ text: "Tell me more." }] }
-  ],
-  instructions: "Be concise."
+comment = "User submitted comment"
+result = ai.moderate(comment)
+
+if result["content"]["flagged"]
+  # hide, block, or route the comment to review
+else
+  # publish the comment
+end
+```
+
+Moderation responses include an overall `flagged` value plus category booleans and scores:
+
+```ruby
+{
+  "content" => {
+    "flagged" => false,
+    "categories" => {
+      "hate" => false,
+      "violence" => false
+    },
+    "category_scores" => {
+      "hate" => 0.01,
+      "violence" => 0.02
+    }
+  },
+  "response_id" => "modr_...",
+  "status" => 200,
+  "error" => nil,
+  "raw" => nil
+}
+```
+
+`moderate` sends a `POST` request to `/v1/moderations` with:
+
+- `model`
+- `input`
+- optional extra `options`
+
+The default moderation model is `omni-moderation-latest`.
+
+You can pass an image URL:
+
+```ruby
+result = ai.moderate(
+  text: "Profile caption",
+  image_url: "https://example.com/image.png"
 )
 ```
 
-A single Gemini Content hash is also accepted. Media uses native `inlineData`
-or `fileData` parts; the helper does not read or upload local files. Supply
-conversation history explicitly: Gemini counting does not resolve
-`previous_response_id` or `previous_interaction_id`. Preflight counts can differ
-from a later generation's reported usage.
+Or a local image path:
 
-`options:` passes native counting API fields. OpenAI tool definitions go in
-`options: { tools: [...] }`; Gemini tool definitions go in
-`options: { generateContentRequest: { tools: [...] } }`. Gemini `instructions:`
-builds `generateContentRequest.systemInstruction`. The helper owns the model
-and input/contents fields; explicit keywords take precedence over matching
-options without mutating the caller's hashes. Native fields keep each API's
-spelling. Use the counting endpoint's options rather than copying every chat
-option. New methods are exposed on the provider classes; there is no legacy
-`AiLite.count_tokens` class shortcut.
+```ruby
+result = ai.moderate(image_path: "tmp/upload.png")
+```
 
-See [OpenAI's counting guide](https://developers.openai.com/api/docs/guides/token-counting)
-and [Gemini's counting API reference](https://ai.google.dev/api/tokens) for supported
-inputs and native parameters.
+Local images are read, base64 encoded, and sent as JSON data URLs. They do not use multipart uploads. Supported local image extensions are `.gif`, `.jpeg`, `.jpg`, `.png`, and `.webp`.
+
+You can also pass OpenAI's raw moderation input shape directly:
+
+```ruby
+result = ai.moderate([
+  { type: "text", text: "Caption" },
+  {
+    type: "image_url",
+    image_url: {
+      url: "https://example.com/image.png"
+    }
+  }
+])
+```
+
+### OpenAI embeddings
+
+Use `embed` to turn text into vectors that can be stored and compared for semantic search, recommendations, duplicate detection, or retrieval-augmented generation.
+
+```ruby
+result = ai.embed("How do I reset my password?")
+vector = result["content"]
+```
+
+For one string input, `content` is the embedding vector:
+
+```ruby
+{
+  "content" => [0.012, -0.44, 0.203],
+  "response_id" => nil,
+  "status" => 200,
+  "error" => nil,
+  "raw" => nil
+}
+```
+
+For multiple inputs, `content` is an array of vectors in the same order:
+
+```ruby
+result = ai.embed([
+  "How do I reset my password?",
+  "How do I update my billing card?"
+])
+
+vectors = result["content"]
+first_vector = vectors[0]
+```
+
+```ruby
+{
+  "content" => [
+    [0.012, -0.44, 0.203],
+    [0.332, 0.021, -0.118]
+  ],
+  "response_id" => nil,
+  "status" => 200,
+  "error" => nil,
+  "raw" => nil
+}
+```
+
+`embed` sends a `POST` request to `/v1/embeddings` with:
+
+- `model`
+- `input`
+- optional `dimensions`
+- optional `encoding_format`
+- optional `debug`
+- optional extra `options`
+
+The default embedding model is `text-embedding-3-small`.
+
+Pass `debug: true` to include the raw OpenAI response, including token usage:
+
+```ruby
+result = ai.embed("Hello", debug: true)
+
+result["content"]       # embedding vector
+result["raw"]["usage"]  # token usage
+```
+
+### OpenAI images
+
+Use `image` to generate an image from a prompt.
+
+```ruby
+result = ai.image("A clean Ruby gem logo on a white background")
+image_data = result["content"]
+```
+
+By default, `content` is the base64-encoded generated image:
+
+```ruby
+{
+  "content" => "iVBORw0KGgo...",
+  "response_id" => nil,
+  "status" => 200,
+  "error" => nil,
+  "raw" => nil
+}
+```
+
+Write the generated image bytes directly to a file with `output_path`:
+
+```ruby
+result = ai.image(
+  "A clean Ruby gem logo on a white background",
+  output_path: "tmp/logo.png"
+)
+```
+
+`image` sends a `POST` request to `/v1/images/generations` with:
+
+- `model`
+- `prompt`
+- optional `size`
+- optional `quality`
+- optional `background`
+- optional `output_format`
+- optional `debug`
+- optional extra `options`
+
+The default image model is `gpt-image-2`.
+
+Use `output_format` to request `png`, `webp`, or `jpeg` output:
+
+```ruby
+result = ai.image(
+  "A transparent app icon",
+  background: "transparent",
+  output_format: "webp",
+  output_path: "tmp/icon.webp"
+)
+```
+
+Pass `debug: true` to include the raw OpenAI response, including usage when returned:
+
+```ruby
+result = ai.image("A tiny robot sticker", debug: true)
+
+result["content"]       # base64 image data
+result["raw"]["usage"]  # token usage, when returned
+```
+
+### OpenAI speech
+
+Use `speak` to generate audio from text.
+
+```ruby
+result = ai.speak("Hello from AI Lite")
+audio_bytes = result["content"]
+```
+
+By default, `content` is the raw audio bytes returned by OpenAI:
+
+```ruby
+{
+  "content" => "...binary audio bytes...",
+  "response_id" => nil,
+  "status" => 200,
+  "error" => nil,
+  "raw" => nil
+}
+```
+
+Write the generated audio directly to a file with `output_path`:
+
+```ruby
+result = ai.speak(
+  "Hello from AI Lite",
+  output_path: "tmp/hello.mp3"
+)
+```
+
+When `output_path` is used, `content` is file metadata:
+
+```ruby
+{
+  "content" => {
+    "path" => "tmp/hello.mp3",
+    "bytes" => 12345,
+    "format" => "mp3"
+  },
+  "response_id" => nil,
+  "status" => 200,
+  "error" => nil,
+  "raw" => nil
+}
+```
+
+Use `base64: true` when you want text-safe audio data that can be transported in JSON and decoded later:
+
+```ruby
+result = ai.speak("Hello from AI Lite", base64: true)
+
+File.binwrite("tmp/hello.mp3", result["content"].unpack1("m0"))
+```
+
+`speak` sends a `POST` request to `/v1/audio/speech` with:
+
+- `model`
+- `input`
+- `voice`
+- optional `response_format`
+- optional `speed`
+- optional `instructions`
+- optional `debug`
+- optional extra `options`
+
+The default speech model is `gpt-4o-mini-tts`.
+The default speech voice is `alloy`.
+The default response format is `mp3`.
+
+For the current list of built-in voices and model-specific voice support, see
+[OpenAI's text-to-speech guide](https://developers.openai.com/api/docs/guides/text-to-speech).
+AI Lite does not expose an OpenAI `available_voices` method.
+
+Set `voice` per call when you want a different built-in voice:
+
+```ruby
+result = ai.speak(
+  "Hello from AI Lite",
+  voice: "sage",
+  output_path: "tmp/hello.mp3"
+)
+```
+
+Use `response_format` to request `mp3`, `opus`, `aac`, `flac`, `wav`, or `pcm` output:
+
+```ruby
+result = ai.speak(
+  "Export this as a WAV file",
+  response_format: "wav",
+  output_path: "tmp/hello.wav"
+)
+```
+
+### OpenAI transcription
+
+Use `transcribe` to turn an audio file into text.
+
+```ruby
+result = ai.transcribe("tmp/meeting.mp3")
+
+puts result["content"]
+```
+
+By default, `content` is the transcript text:
+
+```ruby
+{
+  "content" => "Welcome everyone, let's get started.",
+  "response_id" => nil,
+  "status" => 200,
+  "error" => nil,
+  "raw" => nil
+}
+```
+
+`transcribe` sends a multipart `POST` request to `/v1/audio/transcriptions` with:
+
+- `file`
+- `model`
+- optional `language`
+- optional `prompt`
+- optional `response_format`
+- optional `temperature`
+- optional `timestamp_granularities`
+- optional `debug`
+- optional extra `options`
+
+The default transcription model is `gpt-transcribe`.
+
+Supported local audio extensions are `.flac`, `.m4a`, `.mp3`, `.mp4`, `.mpeg`, `.mpga`, `.ogg`, `.wav`, and `.webm`.
+
+Pass `language` in ISO-639-1 format when you know the input language:
+
+```ruby
+result = ai.transcribe(
+  "tmp/meeting.mp3",
+  language: "en"
+)
+```
+
+Use `prompt` to provide words, names, or style context that may help the transcription:
+
+```ruby
+result = ai.transcribe(
+  "tmp/support-call.mp3",
+  prompt: "The speakers may mention AI Lite, RubyGems, and Net::HTTP."
+)
+```
+
+Pass `debug: true` to include the raw OpenAI response:
+
+```ruby
+result = ai.transcribe("tmp/meeting.mp3", debug: true)
+
+result["content"]  # transcript text
+result["raw"]      # full response body when available
+```
+
+### OpenAI model availability
+
+These helpers are implemented inside the OpenAI provider. Instance and class-level
+calls are supported; class-level network calls use the configured OpenAI client.
+
+```ruby
+ai = AiLite::OpenAI.new
+
+result = ai.available_models
+if result["error"]
+  warn result["error"]
+else
+  puts result["content"] # Array of exact model IDs
+end
+
+ai.model_available?("gpt-5.5") # true, false, or nil if the lookup failed
+AiLite::OpenAI.available_models(debug: true) # raw includes the full model list
+```
+
+`available_models` makes one authenticated `GET /v1/models` request and returns
+the standard envelope. Empty model lists are valid. `model_available?` makes a
+fresh list request and compares the exact ID, without prefix or alias matching.
+It returns `nil` on a lookup error; use `available_models` or
+`check_configured_models` when you need the error details. Empty or non-string
+IDs raise `ArgumentError`. As with other network methods, constructing a client
+without an API key raises `ArgumentError`.
+
+Inspect configured models locally:
+
+```ruby
+ai.configured_models
+# => { "chat" => "gpt-5.5", "moderation" => "omni-moderation-latest",
+#      "embedding" => "text-embedding-3-small", "image" => "gpt-image-2",
+#      "speech" => "gpt-4o-mini-tts", "transcription" => "gpt-transcribe" }
+
+AiLite::OpenAI.configured_models # No API key or network request required
+```
+
+`configured_models` returns a plain hash of usage names to model IDs. An instance
+reports its own settings, including constructor overrides; the class method
+reports the current provider configuration. Neither includes credentials.
+
+Check all configured models with a single list request:
+
+```ruby
+result = ai.check_configured_models
+result["content"]["chat"]
+# => { "model" => "gpt-5.5", "usage" => "chat",
+#      "available" => true, "error" => nil } # if listed for this key
+
+warn result["error"] if result["error"]
+```
+
+Each usage has a report entry. A successful lookup returns `available: true` or
+`false`; lookup failures return `available: nil`, an entry-level error, and the
+same error in the outer envelope. `debug: true` includes the original list or
+error response in `raw`. Network checks use the client's configured timeout and
+do not cache results or run automatically during initialization.
+
+**These are model-list availability checks only.** They do not run chat, image,
+speech, embedding, moderation, or transcription generation requests and create
+no generated output. A listed model does not guarantee endpoint compatibility,
+sufficient quota, or permission for every operation. See the
+[OpenAI List models reference](https://developers.openai.com/api/reference/resources/models/methods/list).
 
 ## Gemini
+
+### Gemini usage
 
 ```ruby
 require "ai_lite"
@@ -323,6 +872,8 @@ warn result["error"] if result["error"]
 The lookup order is an explicit `api_key:`, Gemini configuration, then
 `ENV["GEMINI_API_KEY"]`. OpenAI credentials are never used for Gemini. The gem
 does not load `.env` automatically.
+
+### Gemini configuration
 
 ```ruby
 AiLite::Gemini.configure do |config|
@@ -345,6 +896,8 @@ keywords override configured defaults. Configuration changes reset that provider
 class-level client; existing instances keep their settings. Gemini uses the
 Interactions API at `https://generativelanguage.googleapis.com/v1beta/interactions`
 with `x-goog-api-key` authentication. Its API version and defaults belong to Gemini.
+
+### Gemini chat
 
 `chat` accepts a string, a native Gemini content hash, or an array of native
 content blocks or interaction steps. Structured inputs pass through unchanged:
@@ -395,6 +948,184 @@ constructing a client without a key raises `ArgumentError`.
 Use `chat_stream` for streaming; `chat` rejects
 `stream: true`. Both methods reject `background: true` before sending a request.
 Legacy `AiLite` entry points still use OpenAI.
+
+### Gemini streaming
+
+```ruby
+result = gemini.chat_stream("Tell me a short story", debug: true) do |text|
+  print text
+  $stdout.flush
+end
+puts
+warn result["error"] if result["error"]
+
+# Class-level calls also work:
+AiLite::Gemini.chat_stream("Hello") { |text| print text }
+```
+
+`chat_stream` accepts the same input and keywords as `chat` and requires a block.
+It yields model-output text fragments as they arrive, excluding reasoning and
+other non-text events, and returns the standard envelope with the accumulated
+answer and interaction ID. JSON-looking final text is parsed just like `chat`.
+It runs in the calling thread without creating background threads.
+
+Gemini's final streaming event may contain only partial interaction metadata.
+With `debug: true`, `raw` therefore contains `{ "interaction" => ..., "events" => [...] }`:
+the latest lifecycle interaction object and every received event, including tool,
+reasoning, and usage events when provided. This differs from non-streaming `chat`,
+whose `raw` is the complete HTTP response. No extra retrieval request is made;
+retaining all events uses additional memory. Without debugging, `raw` is `nil`.
+
+HTTP errors, malformed/disconnected streams, and incomplete or failed interactions
+return an error envelope, retaining partial text when available. Always check
+`error`, even with HTTP status `200`. Missing blocks raise `ArgumentError`, and
+exceptions from your block propagate. The configured timeout applies to each
+network read, not the total stream duration. See Google's
+[streaming event reference](https://ai.google.dev/api/interactions-api#InteractionSseStreamEvent).
+
+
+### Gemini function calling
+
+Pass native tool definitions through `tools:` on `chat` or `chat_stream`.
+Gemini accepts the basic function definition below. Native
+fields and built-in tools retain their formats; `options:` remains the
+escape hatch for settings such as tool choice.
+
+```ruby
+ai = AiLite::Gemini.new
+
+tools = [{
+  type: "function",
+  name: "lookup_order",
+  description: "Look up an order's shipping status",
+  parameters: {
+    type: "object",
+    properties: { order_id: { type: "integer" } },
+    required: ["order_id"],
+    additionalProperties: false
+  }
+}]
+
+result = ai.chat("Where is order 123?", tools: tools)
+raise result["error"] if result["error"]
+
+# When a function is requested:
+# result["tool_calls"] => [
+#   { "id" => "call_123", "name" => "lookup_order",
+#     "arguments" => { "order_id" => 123 } }
+# ]
+```
+
+A tool request is a successful chat result. `content` may be nil or contain text
+alongside tool calls. The `tool_calls` key appears only when complete function
+calls are present; existing text-only envelopes are unchanged. Gemini IDs come from the
+function-call step's `id`. Arguments are decoded into hashes without requiring
+`debug: true`. Failed/incomplete responses do not expose executable tool calls.
+
+Your application validates arguments, authorizes access, and executes only
+functions it explicitly allows. For example, in a Rails controller:
+
+```ruby
+calls = result.fetch("tool_calls", [])
+unless calls.empty?
+  outputs = calls.map do |call|
+    raise "Unsupported tool" unless call["name"] == "lookup_order"
+    order_id = call["arguments"].fetch("order_id")
+    raise "Invalid order ID" unless order_id.is_a?(Integer)
+
+    order = current_user.orders.find(order_id)
+    { id: call["id"], name: call["name"], output: { status: order.status } }
+  end
+
+  result = ai.chat(
+    nil,
+    previous_response_id: result["response_id"],
+    tools: tools,
+    tool_results: outputs
+  )
+  raise result["error"] if result["error"]
+end
+
+puts result["content"]
+# The model may request more tools; your app decides whether to continue.
+```
+
+`tool_results:` takes a nonempty array of `{ id:, name:, output: }` hashes,
+requires `previous_response_id:`, and uses `nil` as the positional message.
+Strings are sent as text; other JSON-compatible outputs are JSON-encoded.
+The helper translates results into Gemini `function_result` steps. Return a result for every requested call and
+reuse the same provider/model and tool definitions. IDs refer to stored provider
+state; when using stateless requests, pass native history/results as the
+positional input instead. Preserve all provider-required history, including
+reasoning/thought items and signatures; normalized `tool_calls` alone are not
+full conversation history. Use non-streaming `chat` with `debug: true` for the full native response;
+streaming debug output may contain partial metadata plus events.
+
+`chat_stream` accepts the same tool keywords. Its block still receives text
+only; complete tool calls are returned in the final envelope after streaming.
+Do not execute streamed argument fragments. Class-level calls work too:
+`AiLite::Gemini.chat(...)`.
+
+Explicit `tools:` overrides `options[:tools]`, including `tools: []` to clear
+it. AI Lite does not execute functions, dispatch method names, retry tool calls,
+or run an automatic agent loop. Built-in provider tools are passed through;
+only custom `function_call` outputs are normalized into `tool_calls`.
+
+See the [Gemini function-calling guide](https://ai.google.dev/gemini-api/docs/function-calling)
+for native schemas and continuation requirements.
+
+### Gemini token counting
+
+```ruby
+gemini = AiLite::Gemini.new
+result = gemini.count_tokens("Hello from AI Lite.")
+result["content"] # Integer input-token count when error is nil
+result["error"]   # nil on success
+
+# Uses this provider's independent configuration:
+AiLite::Gemini.count_tokens("Hello", instructions: "Be concise.")
+```
+
+These are authenticated HTTP calls, not offline tokenizers. They count input
+only, without generating an answer or predicting output tokens or a final bill.
+Counts depend on the model and the supplied context. The helper uses the configured
+chat `model` by default; pass `model:` to override it. No tokenizer gem is needed.
+The standard envelope contains an integer `content`, a nil `response_id`, and
+`raw` only with `debug: true`. Check `error` before using the count; zero is a
+valid count, and failures return nil content. Chat output-token defaults are
+not added to counting requests.
+
+Gemini uses `POST /v1beta/models/{model}:countTokens`. Its structured inputs use
+**Content objects with `parts`, not the Interactions objects accepted by `chat`**:
+
+```ruby
+gemini.count_tokens(
+  [
+    { role: "user", parts: [{ text: "Hello" }] },
+    { role: "model", parts: [{ text: "Hi!" }] },
+    { role: "user", parts: [{ text: "Tell me more." }] }
+  ],
+  instructions: "Be concise."
+)
+```
+
+A single Gemini Content hash is also accepted. Media uses native `inlineData`
+or `fileData` parts; the helper does not read or upload local files. Supply
+conversation history explicitly: Gemini counting does not resolve
+`previous_response_id` or `previous_interaction_id`. Preflight counts can differ
+from a later generation's reported usage.
+
+`options:` passes native counting API fields. Tool definitions go in
+`options: { generateContentRequest: { tools: [...] } }`. `instructions:` builds
+`generateContentRequest.systemInstruction`. Native fields keep the API's spelling.
+
+The helper owns the model and input fields; explicit keywords take precedence
+without mutating the caller's hashes. Use the counting endpoint's native options
+rather than copying every chat option. There is no legacy `AiLite.count_tokens`
+class shortcut.
+
+See [Gemini’s counting API reference](https://ai.google.dev/api/tokens)
+for supported inputs and native parameters.
 
 ### Gemini embeddings
 
@@ -634,672 +1365,338 @@ is downloaded locally. Gemini controls video support, limits, and processing.
 For streaming, pass the video and text blocks directly to `chat_stream`; the
 `youtube` helper itself uses non-streaming `chat`.
 
-### Gemini streaming
+## Claude
+
+`AiLite::Claude` supports synchronous chat and explicit message history starting
+in v1.3.0. Streaming chat and normalized tool calls/results are also supported.
+Token counting and model availability helpers are also supported.
+
+### Claude chat
 
 ```ruby
-result = gemini.chat_stream("Tell me a short story", debug: true) do |text|
-  print text
-  $stdout.flush
-end
-puts
-warn result["error"] if result["error"]
+require "ai_lite/claude" # Also loaded by require "ai_lite"
 
-# Class-level calls also work:
-AiLite::Gemini.chat_stream("Hello") { |text| print text }
-```
-
-`chat_stream` accepts the same input and keywords as `chat` and requires a block.
-It yields model-output text fragments as they arrive, excluding reasoning and
-other non-text events, and returns the standard envelope with the accumulated
-answer and interaction ID. JSON-looking final text is parsed just like `chat`.
-It runs in the calling thread without creating background threads.
-
-Gemini's final streaming event may contain only partial interaction metadata.
-With `debug: true`, `raw` therefore contains `{ "interaction" => ..., "events" => [...] }`:
-the latest lifecycle interaction object and every received event, including tool,
-reasoning, and usage events when provided. This differs from non-streaming `chat`,
-whose `raw` is the complete HTTP response. No extra retrieval request is made;
-retaining all events uses additional memory. Without debugging, `raw` is `nil`.
-
-HTTP errors, malformed/disconnected streams, and incomplete or failed interactions
-return an error envelope, retaining partial text when available. Always check
-`error`, even with HTTP status `200`. Missing blocks raise `ArgumentError`, and
-exceptions from your block propagate. The configured timeout applies to each
-network read, not the total stream duration. See Google's
-[streaming event reference](https://ai.google.dev/api/interactions-api#InteractionSseStreamEvent).
-
-The remaining usage sections below describe the OpenAI provider.
-
-## Usage
-
-```ruby
-require "ai_lite"
-
-ai = AiLite::OpenAI.new
-result = ai.chat("Say hello")
-
+claude = AiLite::Claude.new # Reads ANTHROPIC_API_KEY; does not load .env
+result = claude.chat("Hello", max_output_tokens: 32,
+                     options: { thinking: { type: "disabled" }, output_config: { effort: "low" } })
+raise result["error"] if result["error"]
 puts result["content"]
 ```
 
-By default, the client looks for an API key in `OPENAI_API_KEY`, then falls back to `OPEN_AI_TOKEN`.
+Defaults: `claude-haiku-5-5`, API version `2026-10-21`, 120-second timeout, and
+2,000 maximum output tokens. Thinking settings are provider defaults unless
+supplied through `options:`. The short example disables thinking and limits output
+for inexpensive development checks; those options depend on the selected model.
 
-You can also pass the key directly:
+The example above uses the default Haiku model. For `claude-sonnet-5-5`, use
+`thinking: { type: "between_tools" }` instead of `disabled`:
 
 ```ruby
-ai = AiLite::OpenAI.new(api_key: "sk-...")
+result = claude.chat("Reply only OK.", model: "claude-sonnet-5-5",
+                     max_output_tokens: 32,
+                     options: { thinking: { type: "between_tools" }, output_config: { effort: "low" } })
+raise result["error"] if result["error"]
+puts result["content"]
 ```
 
-## Configuration
+AI Lite passes these native options through to Claude; it does not translate
+thinking settings between models. The API returns an error for unsupported settings.
 
-In Rails, configure the default client from an initializer:
+### Claude configuration
 
 ```ruby
-# config/initializers/ai_lite.rb
-AiLite::OpenAI.configure do |config|
-  config.api_key = ENV["OPENAI_API_KEY"]
-  config.model = "gpt-5.5"
-  config.moderation_model = "omni-moderation-latest"
-  config.embedding_model = "text-embedding-3-small"
-  config.image_model = "gpt-image-2"
-  config.speech_model = "gpt-4o-mini-tts"
-  config.speech_voice = "alloy"
-  config.transcription_model = "gpt-transcribe"
-  config.timeout = 120
-  config.max_output_tokens = 2000
+AiLite::Claude.configure do |config|
+  config.api_key = ENV["ANTHROPIC_API_KEY"]
+  config.model = "claude-haiku-5-5"
+  config.max_output_tokens = 256
+  # config.workspace_id = "wrkspc_..." # For keys that require workspace selection
 end
+AiLite::Claude.chat("Hello")
 ```
 
-Any value left unset falls back to AI Lite's default:
+Constructor keywords override configuration, and `api_key:` falls back to
+`ANTHROPIC_API_KEY`. Other providers' keys are never used. `api_version` and
+`workspace_id` are configurable in both places. Missing credentials raise
+`ArgumentError`; request, transport, and response failures use the normal error
+envelope. `instructions:` maps to `system`, and `max_output_tokens:` maps to
+`max_tokens`. Native options pass through without mutating the caller's hashes.
 
-- `model`: `gpt-5.5`
-- `moderation_model`: `omni-moderation-latest`
-- `embedding_model`: `text-embedding-3-small`
-- `image_model`: `gpt-image-2`
-- `speech_model`: `gpt-4o-mini-tts`
-- `speech_voice`: `alloy`
-- `transcription_model`: `gpt-transcribe`
-- `timeout`: `120`
-- `max_output_tokens`: `2000`
+### Claude message history
 
-`timeout` is applied to both the HTTP connection timeout and the HTTP read timeout.
-
-Then use the configured singleton-style client:
+Claude's standard Messages API requires history on each turn:
 
 ```ruby
-result = AiLite::OpenAI.chat("Say hello")
+history = [{ role: "user", content: "My favorite color is blue." }]
+first = claude.chat(history)
+raise first["error"] if first["error"]
+history << first["assistant_message"]
+history << { role: "user", content: "What is my favorite color?" }
+second = claude.chat(history)
 ```
 
-You can still instantiate a separate client for another token:
+The usual envelope is preserved, with `assistant_message` added for replay.
+It contains the original assistant content blocks, including any thinking blocks
+and signatures, even when `raw` is nil. Treat it as provider conversation data;
+`content` remains the displayable text (or parsed JSON). `response_id` identifies
+the message but cannot continue the conversation: `previous_response_id:` returns
+an error. No conversation is stored inside the client.
+
+Use `debug: true` for the full native response and usage. Truncation, refusals,
+and paused turns return a descriptive error while
+preserving available text and assistant content. `end_turn` and
+`stop_sequence` are completed answers; `tool_use` with valid tool calls is a
+successful request for your application to execute tools.
+Do not treat HTTP 200 alone as success. Native content blocks can be supplied in
+message arrays; the image and PDF helpers below build these blocks for you.
+
+### Claude streaming
+
+`chat_stream` accepts the same keywords and explicit message history as `chat`.
+It requires a block, yields text deltas as they arrive, and returns the final
+standard envelope:
 
 ```ruby
-client = AiLite::OpenAI.new(api_key: "sk-other-token")
-result = client.chat("Say hello")
+result = claude.chat_stream("Tell me a short story.") do |delta|
+  print delta
+end
+raise result["error"] if result["error"]
+history = [{ role: "user", content: "Tell me a short story." },
+           result["assistant_message"]]
+
+# Also available through the configured singleton:
+AiLite::Claude.chat_stream("Hello") { |delta| print delta }
 ```
 
-## Migrating to provider namespaces
+Only displayable text is yielded. Completed responses preserve the original
+content blocks, including assembled thinking text and signatures, in
+`assistant_message` for history replay. `debug: true` includes the assembled
+native message and usage in `raw`; it does not retain an event log. Final text
+is parsed as JSON when possible, just like `chat`.
 
-Use `AiLite::OpenAI` for OpenAI configuration, class methods, and instances.
-OpenAI owns its API URLs, defaults, configuration, HTTP requests, and response handling.
-Gemini has its own configuration, requests, and response handling; provider capabilities are implemented separately.
+Check `error` even after receiving text: interrupted streams and API errors
+preserve partial text, while truncation, refusals, and paused turns
+retain the same error behavior as `chat`. Complete tool calls are returned in
+the final envelope; argument fragments are never yielded. An interrupted stream does not return
+an `assistant_message` for replay. Exceptions raised by your block propagate
+to the caller. `previous_response_id:` is unsupported; pass explicit history.
 
-Existing `AiLite.new`, `AiLite.chat`, and the other top-level methods continue to
-forward to OpenAI, sharing the same configuration and cached client. They emit a
-deprecation warning to stderr once per legacy entry point per process. They will
-remain available throughout v1.x and will be removed in v2.0.
+Reference: [Claude Messages API](https://platform.claude.com/docs/en/api/messages/create).
 
-```ruby
-# Before
-AiLite.configure { |config| config.api_key = ENV["OPENAI_API_KEY"] }
-ai = AiLite.new
+### Claude function calling
 
-# After
-AiLite::OpenAI.configure { |config| config.api_key = ENV["OPENAI_API_KEY"] }
-ai = AiLite::OpenAI.new
-# Class methods work too: AiLite::OpenAI.chat("Hello")
-```
-
-`AiLite.new` returns an `AiLite::OpenAI` instance. Compatibility covers documented
-construction, configuration, utility methods, and constants; subclassing the legacy
-`AiLite` class or relying on its exact instance class is not supported. Migrate such
-code to `AiLite::OpenAI`.
-
-Existing utility calls keep their methods and result envelopes. Legacy
-constants such as `AiLite::DEFAULT_MODEL` and `AiLite::Configuration` remain
-aliases for their OpenAI counterparts. The gem version stays at `AiLite::VERSION`.
-
-## Chat
+Pass native Claude definitions through `tools:` on `chat` or `chat_stream`.
+Custom tools use `name`, `description`, and `input_schema`. Explicit `tools:`
+overrides `options[:tools]`; `tools: []` clears it. Native fields and server-tool
+definitions pass through. Use `options:` for settings such as `tool_choice`. Support varies by model;
+Sonnet 5.5 rejects forced `tool`/`any` choices, so use automatic selection.
 
 ```ruby
-result = ai.chat(
-  "Return JSON confirming whether this is valid.",
-  instructions: "Return only minified JSON.",
-  max_output_tokens: 500,
-  options: {
-    text: { verbosity: "low" }
+tools = [{
+  name: "lookup_order",
+  description: "Look up an order's shipping status.",
+  input_schema: {
+    type: "object",
+    properties: { order_id: { type: "integer" } },
+    required: ["order_id"],
+    additionalProperties: false
   }
-)
-```
+}]
+history = [{ role: "user", content: "Where is order 123?" }]
+result = claude.chat(history, tools: tools)
+raise result["error"] if result["error"]
 
-`chat` sends a `POST` request to `/v1/responses` with:
-
-- `model`
-- `input`
-- `max_output_tokens`
-- optional `instructions`
-- optional `previous_response_id`
-- optional `debug`
-- optional extra `options`
-
-The default model is `gpt-5.5`.
-
-The OpenAI API URL is fixed to `https://api.openai.com/v1/responses`.
-
-### Message-Array Input
-
-For a conversation with multiple input messages, pass an array using the OpenAI Responses API message shape:
-
-```ruby
-result = ai.chat([
-  { role: "developer", content: "Be concise." },
-  { role: "user", content: "Explain dependency injection." }
-])
-```
-
-AI Lite sends the array unchanged as `input`, so you can also use richer Responses API content items when needed.
-
-### Multi-Turn Chat
-
-Responses include a `response_id`. Pass it to the next call as `previous_response_id` to continue the conversation:
-
-```ruby
-first = ai.chat("Tell me a short joke.")
-
-follow_up = ai.chat(
-  "Explain why that is funny.",
-  previous_response_id: first["response_id"]
-)
-
-puts follow_up["content"]
-```
-
-Passing `previous_response_id` through `options` remains supported for backward compatibility.
-
-### Streaming Chat
-
-Use `chat_stream` to receive text as it arrives. It accepts the same keywords as
-`chat`, requires a block, and returns the usual result envelope when the stream
-finishes.
-
-```ruby
-ai = AiLite::OpenAI.new
-
-result = ai.chat_stream("Explain Ruby blocks in three sentences.") do |text|
-  print text
-  $stdout.flush
+# result["tool_calls"] contains { "id", "name", "arguments" } hashes.
+calls = result.fetch("tool_calls", [])
+unless calls.empty?
+  # Preserve every assistant block, including thinking signatures.
+  history << result.fetch("assistant_message")
+  outputs = calls.map do |call|
+    raise "Unsupported tool" unless call["name"] == "lookup_order"
+    order_id = call["arguments"].fetch("order_id")
+    raise "Invalid order ID" unless order_id.is_a?(Integer)
+    order = current_user.orders.find(order_id) # Application-authorized lookup
+    { id: call["id"], name: call["name"], output: { status: order.status } }
+  end
+  result = claude.chat(history, tools: tools, tool_results: outputs)
+  raise result["error"] if result["error"]
 end
-puts
-
-warn result["error"] if result["error"]
-# result["content"] contains the final answer.
-# result["response_id"] can be passed as previous_response_id on the next call.
+puts result["content"]
 ```
 
-Class-level usage is also supported:
+A valid `tool_use` response has no error and includes `tool_calls`, even when
+`content` is nil. Calls are exposed only after a complete response; interrupted,
+truncated, and malformed calls are not executable. Only native `tool_use` blocks
+are normalized, not `server_tool_use` blocks. Original blocks remain available in
+`assistant_message` without enabling debug.
+
+Unlike OpenAI and Gemini, Claude requires explicit history rather than a response
+ID. `tool_results:` requires history ending with the assistant tool-use message,
+and a nonempty array of `{ id:, name:, output: }` entries matching every call.
+Strings remain text; other JSON-compatible outputs become JSON text. Optional
+`is_error: true` reports a failed tool. The helper appends a user message containing
+native `tool_result` blocks to the outgoing request without modifying your history.
+For another turn, retain that user tool-result message in your own history before
+appending the next `assistant_message`. For media results or specialized native
+fields, supply native `tool_result` blocks directly in the message history instead.
+
+`chat_stream` accepts the same tool keywords and returns calls in its final
+envelope. Both methods also work through `AiLite::Claude` class methods.
+Your application validates arguments, executes allowed tools, and decides whether
+to continue if Claude requests more calls. AI Lite does not execute tools or run
+an automatic tool loop.
+
+See [Claude tool definitions](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools)
+and [handling tool calls](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls).
+
+### Claude token counting
 
 ```ruby
-AiLite::OpenAI.chat_stream("Say hello") { |text| print text }
-```
+claude = AiLite::Claude.new
+result = claude.count_tokens("Hello from AI Lite.")
+raise result["error"] if result["error"]
+puts result["content"] # Integer input-token count
 
-The block receives text strings, which are not necessarily whole words or tokens.
-JSON-looking final output is parsed in the returned `content`, just like `chat`;
-the block still receives the original text fragments. With `debug: true`, `raw`
-contains the terminal response object (or the available error/last event on failure),
-not a history of every streaming event. Tool arguments, reasoning, and refusal
-events are not yielded as text; the terminal response retains these outputs in
-`raw` when debugging. See the [OpenAI streaming event reference](https://developers.openai.com/api/reference/resources/responses/streaming-events).
+# Uses the independent Claude configuration:
+AiLite::Claude.count_tokens("Hello", instructions: "Be concise.")
 
-Always check `result["error"]`: failed, incomplete, malformed, or disconnected
-streams return an error, retaining text already received when available. An HTTP
-status of `200` alone does not mean generation completed successfully. Exceptions
-raised by your block propagate to the caller; calling without a block raises
-`ArgumentError` before making a request.
-
-Streaming runs in the calling thread and creates no worker threads. In Rails,
-forwarding chunks to a browser still requires an appropriate streaming response
-or messaging mechanism in the application. The configured read timeout applies
-to individual network reads, not to the total generation duration.
-
-## Moderation
-
-Use `moderate` to classify user-submitted text or images for potentially harmful content before saving, publishing, or sending it into another AI call.
-
-A common use case is checking a comment before it is shown publicly:
-
-```ruby
-comment = "User submitted comment"
-result = ai.moderate(comment)
-
-if result["content"]["flagged"]
-  # hide, block, or route the comment to review
-else
-  # publish the comment
-end
-```
-
-Moderation responses include an overall `flagged` value plus category booleans and scores:
-
-```ruby
-{
-  "content" => {
-    "flagged" => false,
-    "categories" => {
-      "hate" => false,
-      "violence" => false
-    },
-    "category_scores" => {
-      "hate" => 0.01,
-      "violence" => 0.02
-    }
-  },
-  "response_id" => "modr_...",
-  "status" => 200,
-  "error" => nil,
-  "raw" => nil
-}
-```
-
-`moderate` sends a `POST` request to `/v1/moderations` with:
-
-- `model`
-- `input`
-- optional extra `options`
-
-The default moderation model is `omni-moderation-latest`.
-
-You can pass an image URL:
-
-```ruby
-result = ai.moderate(
-  text: "Profile caption",
-  image_url: "https://example.com/image.png"
-)
-```
-
-Or a local image path:
-
-```ruby
-result = ai.moderate(image_path: "tmp/upload.png")
-```
-
-Local images are read, base64 encoded, and sent as JSON data URLs. They do not use multipart uploads. Supported local image extensions are `.gif`, `.jpeg`, `.jpg`, `.png`, and `.webp`.
-
-You can also pass OpenAI's raw moderation input shape directly:
-
-```ruby
-result = ai.moderate([
-  { type: "text", text: "Caption" },
-  {
-    type: "image_url",
-    image_url: {
-      url: "https://example.com/image.png"
-    }
-  }
-])
-```
-
-## Embeddings
-
-Use `embed` to turn text into vectors that can be stored and compared for semantic search, recommendations, duplicate detection, or retrieval-augmented generation.
-
-```ruby
-result = ai.embed("How do I reset my password?")
-vector = result["content"]
-```
-
-For one string input, `content` is the embedding vector:
-
-```ruby
-{
-  "content" => [0.012, -0.44, 0.203],
-  "response_id" => nil,
-  "status" => 200,
-  "error" => nil,
-  "raw" => nil
-}
-```
-
-For multiple inputs, `content` is an array of vectors in the same order:
-
-```ruby
-result = ai.embed([
-  "How do I reset my password?",
-  "How do I update my billing card?"
-])
-
-vectors = result["content"]
-first_vector = vectors[0]
-```
-
-```ruby
-{
-  "content" => [
-    [0.012, -0.44, 0.203],
-    [0.332, 0.021, -0.118]
+# Count explicit history and native tool definitions:
+claude.count_tokens(
+  [
+    { role: "user", content: "Hello" },
+    { role: "assistant", content: "Hi!" },
+    { role: "user", content: "Look up order 123." }
   ],
-  "response_id" => nil,
-  "status" => 200,
-  "error" => nil,
-  "raw" => nil
-}
-```
-
-`embed` sends a `POST` request to `/v1/embeddings` with:
-
-- `model`
-- `input`
-- optional `dimensions`
-- optional `encoding_format`
-- optional `debug`
-- optional extra `options`
-
-The default embedding model is `text-embedding-3-small`.
-
-Pass `debug: true` to include the raw OpenAI response, including token usage:
-
-```ruby
-result = ai.embed("Hello", debug: true)
-
-result["content"]       # embedding vector
-result["raw"]["usage"]  # token usage
-```
-
-## Images
-
-Use `image` to generate an image from a prompt.
-
-```ruby
-result = ai.image("A clean Ruby gem logo on a white background")
-image_data = result["content"]
-```
-
-By default, `content` is the base64-encoded generated image:
-
-```ruby
-{
-  "content" => "iVBORw0KGgo...",
-  "response_id" => nil,
-  "status" => 200,
-  "error" => nil,
-  "raw" => nil
-}
-```
-
-Write the generated image bytes directly to a file with `output_path`:
-
-```ruby
-result = ai.image(
-  "A clean Ruby gem logo on a white background",
-  output_path: "tmp/logo.png"
+  options: {
+    tools: [{ name: "lookup_order", input_schema: {
+      type: "object", properties: { order_id: { type: "integer" } }
+    } }]
+  }
 )
 ```
 
-`image` sends a `POST` request to `/v1/images/generations` with:
+This calls `POST /v1/messages/count_tokens`; it does not generate a response or
+use a local tokenizer. The configured chat model is used unless `model:` is
+provided. `instructions:` maps to `system`; native system blocks and counting
+options such as tools go through `options:`. Explicit model, input, and
+instructions take precedence without mutating your inputs.
 
-- `model`
-- `prompt`
-- optional `size`
-- optional `quality`
-- optional `background`
-- optional `output_format`
-- optional `debug`
-- optional extra `options`
+Native message content blocks, including supported images, documents, and tool
+history, pass through unchanged. This method does not read or upload local files.
+Supply full message history; previous response IDs cannot continue Claude requests.
+Chat output-token defaults and streaming flags are not automatically added.
 
-The default image model is `gpt-image-2`.
+The standard envelope contains a nonnegative integer `content`, nil `response_id`,
+and `raw` only with `debug: true`. Check `error` before using the count; zero is
+valid, while failures return nil content. Counts describe input tokens, not output
+tokens or a final bill, and may differ from a later generation's reported usage.
+Use counting-specific native options rather than copying all chat options.
 
-Use `output_format` to request `png`, `webp`, or `jpeg` output:
+See [Claude’s token counting API](https://platform.claude.com/docs/en/api/messages/count_tokens).
+
+### Claude model checks
 
 ```ruby
-result = ai.image(
-  "A transparent app icon",
-  background: "transparent",
-  output_format: "webp",
-  output_path: "tmp/icon.webp"
-)
+claude = AiLite::Claude.new
+result = claude.available_models
+raise result["error"] if result["error"]
+puts result["content"] # Array of model IDs from the Claude catalog
+
+claude.model_available?("claude-haiku-5-5") # true, false, or nil
+claude.configured_models                  # { "chat" => "claude-haiku-5-5" }
+claude.check_configured_models            # Standard envelope with a report
+
+# Class-level helpers use Claude's independent configuration:
+AiLite::Claude.available_models
+AiLite::Claude.model_available?("claude-haiku-5-5")
+AiLite::Claude.configured_models          # No API key or network required
+AiLite::Claude.check_configured_models
 ```
 
-Pass `debug: true` to include the raw OpenAI response, including usage when returned:
+`available_models` calls `GET /v1/models`, follows `has_more` / `last_id`
+pagination using `after_id`, and returns unique model IDs in `content`. With
+`debug: true`, `raw` contains `{ "pages" => [...] }`, preserving native metadata
+from each fetched page. Failed lookups return an error rather than a partial list.
+
+`model_available?` checks an exact, case-sensitive ID from that list: `true` means
+listed, `false` means absent, and `nil` means the lookup failed. It does not resolve
+aliases. Empty or non-string IDs raise `ArgumentError`. Use `available_models`
+for error details.
+
+`configured_models` returns a local snapshot with only the `chat` model, which is
+also used by streaming and token counting. Instance snapshots reflect the
+instance's settings; the class helper reads current configuration. Neither makes
+a request or changes configuration, and editing a returned string does not change
+the client.
+
+`check_configured_models` fetches the catalog once across its pages and returns:
 
 ```ruby
-result = ai.image("A tiny robot sticker", debug: true)
-
-result["content"]       # base64 image data
-result["raw"]["usage"]  # token usage, when returned
-```
-
-## Speech
-
-Use `speak` to generate audio from text.
-
-```ruby
-result = ai.speak("Hello from AI Lite")
-audio_bytes = result["content"]
-```
-
-By default, `content` is the raw audio bytes returned by OpenAI:
-
-```ruby
-{
-  "content" => "...binary audio bytes...",
-  "response_id" => nil,
-  "status" => 200,
-  "error" => nil,
-  "raw" => nil
-}
-```
-
-Write the generated audio directly to a file with `output_path`:
-
-```ruby
-result = ai.speak(
-  "Hello from AI Lite",
-  output_path: "tmp/hello.mp3"
-)
-```
-
-When `output_path` is used, `content` is file metadata:
-
-```ruby
-{
-  "content" => {
-    "path" => "tmp/hello.mp3",
-    "bytes" => 12345,
-    "format" => "mp3"
-  },
-  "response_id" => nil,
-  "status" => 200,
-  "error" => nil,
-  "raw" => nil
-}
-```
-
-Use `base64: true` when you want text-safe audio data that can be transported in JSON and decoded later:
-
-```ruby
-result = ai.speak("Hello from AI Lite", base64: true)
-
-File.binwrite("tmp/hello.mp3", result["content"].unpack1("m0"))
-```
-
-`speak` sends a `POST` request to `/v1/audio/speech` with:
-
-- `model`
-- `input`
-- `voice`
-- optional `response_format`
-- optional `speed`
-- optional `instructions`
-- optional `debug`
-- optional extra `options`
-
-The default speech model is `gpt-4o-mini-tts`.
-The default speech voice is `alloy`.
-The default response format is `mp3`.
-
-For the current list of built-in voices and model-specific voice support, see
-[OpenAI's text-to-speech guide](https://developers.openai.com/api/docs/guides/text-to-speech).
-AI Lite does not expose an OpenAI `available_voices` method.
-
-Set `voice` per call when you want a different built-in voice:
-
-```ruby
-result = ai.speak(
-  "Hello from AI Lite",
-  voice: "sage",
-  output_path: "tmp/hello.mp3"
-)
-```
-
-Use `response_format` to request `mp3`, `opus`, `aac`, `flac`, `wav`, or `pcm` output:
-
-```ruby
-result = ai.speak(
-  "Export this as a WAV file",
-  response_format: "wav",
-  output_path: "tmp/hello.wav"
-)
-```
-
-## Transcription
-
-Use `transcribe` to turn an audio file into text.
-
-```ruby
-result = ai.transcribe("tmp/meeting.mp3")
-
-puts result["content"]
-```
-
-By default, `content` is the transcript text:
-
-```ruby
-{
-  "content" => "Welcome everyone, let's get started.",
-  "response_id" => nil,
-  "status" => 200,
-  "error" => nil,
-  "raw" => nil
-}
-```
-
-`transcribe` sends a multipart `POST` request to `/v1/audio/transcriptions` with:
-
-- `file`
-- `model`
-- optional `language`
-- optional `prompt`
-- optional `response_format`
-- optional `temperature`
-- optional `timestamp_granularities`
-- optional `debug`
-- optional extra `options`
-
-The default transcription model is `gpt-transcribe`.
-
-Supported local audio extensions are `.flac`, `.m4a`, `.mp3`, `.mp4`, `.mpeg`, `.mpga`, `.ogg`, `.wav`, and `.webm`.
-
-Pass `language` in ISO-639-1 format when you know the input language:
-
-```ruby
-result = ai.transcribe(
-  "tmp/meeting.mp3",
-  language: "en"
-)
-```
-
-Use `prompt` to provide words, names, or style context that may help the transcription:
-
-```ruby
-result = ai.transcribe(
-  "tmp/support-call.mp3",
-  prompt: "The speakers may mention AI Lite, RubyGems, and Net::HTTP."
-)
-```
-
-Pass `debug: true` to include the raw OpenAI response:
-
-```ruby
-result = ai.transcribe("tmp/meeting.mp3", debug: true)
-
-result["content"]  # transcript text
-result["raw"]      # full response body when available
-```
-
-## Model Availability
-
-These helpers are implemented inside the OpenAI provider. Instance and class-level
-calls are supported; class-level network calls use the configured OpenAI client.
-
-```ruby
-ai = AiLite::OpenAI.new
-
-result = ai.available_models
-if result["error"]
-  warn result["error"]
-else
-  puts result["content"] # Array of exact model IDs
-end
-
-ai.model_available?("gpt-5.5") # true, false, or nil if the lookup failed
-AiLite::OpenAI.available_models(debug: true) # raw includes the full model list
-```
-
-`available_models` makes one authenticated `GET /v1/models` request and returns
-the standard envelope. Empty model lists are valid. `model_available?` makes a
-fresh list request and compares the exact ID, without prefix or alias matching.
-It returns `nil` on a lookup error; use `available_models` or
-`check_configured_models` when you need the error details. Empty or non-string
-IDs raise `ArgumentError`. As with other network methods, constructing a client
-without an API key raises `ArgumentError`.
-
-Inspect configured models locally:
-
-```ruby
-ai.configured_models
-# => { "chat" => "gpt-5.5", "moderation" => "omni-moderation-latest",
-#      "embedding" => "text-embedding-3-small", "image" => "gpt-image-2",
-#      "speech" => "gpt-4o-mini-tts", "transcription" => "gpt-transcribe" }
-
-AiLite::OpenAI.configured_models # No API key or network request required
-```
-
-`configured_models` returns a plain hash of usage names to model IDs. An instance
-reports its own settings, including constructor overrides; the class method
-reports the current provider configuration. Neither includes credentials.
-
-Check all configured models with a single list request:
-
-```ruby
-result = ai.check_configured_models
+result = claude.check_configured_models
 result["content"]["chat"]
-# => { "model" => "gpt-5.5", "usage" => "chat",
-#      "available" => true, "error" => nil } # if listed for this key
-
-warn result["error"] if result["error"]
+# { "model" => "claude-haiku-5-5", "usage" => "chat",
+#   "available" => true, "error" => nil } # if listed
 ```
 
-Each usage has a report entry. A successful lookup returns `available: true` or
-`false`; lookup failures return `available: nil`, an entry-level error, and the
-same error in the outer envelope. `debug: true` includes the original list or
-error response in `raw`. Network checks use the client's configured timeout and
-do not cache results or run automatically during initialization.
+Lookup failures set `available` to nil and preserve the error in both the report
+and the envelope. These are catalog availability checks only: they do not run
+chat generation, create output, or prove endpoint compatibility, quota, or
+model-specific access. The catalog can include deprecated models with restricted
+access. No checks run automatically during client construction.
 
-**These are model-list availability checks only.** They do not run chat, image,
-speech, embedding, moderation, or transcription generation requests and create
-no generated output. A listed model does not guarantee endpoint compatibility,
-sufficient quota, or permission for every operation. See the
-[OpenAI List models reference](https://developers.openai.com/api/reference/resources/models/methods/list).
+See [Claude’s Models API](https://platform.claude.com/docs/en/api/models/list).
 
-## Return Shape
+### Claude image and PDF inputs
+
+`image_input` and `pdf_input` build native content blocks for `chat`,
+`chat_stream`, and `count_tokens`. Each takes exactly one of `path:` or `url:`:
+
+```ruby
+claude = AiLite::Claude.new
+image = claude.image_input(path: "photo.png")
+pdf = claude.pdf_input(url: "https://example.com/report.pdf",
+                       title: "Annual report", citations: true)
+history = [{ role: "user", content: [
+  image, pdf, { type: "text", text: "Compare this photo with the report." }
+] }]
+
+result = claude.chat(history)
+raise result["error"] if result["error"]
+puts result["content"]
+
+# The same message history works for streaming and token counting:
+claude.chat_stream(history) { |delta| print delta }
+claude.count_tokens(history)
+
+# Block construction also works without a client or API key:
+AiLite::Claude.image_input(url: "https://example.com/photo.jpg")
+AiLite::Claude.pdf_input(path: "report.pdf")
+```
+
+These helpers return plain hashes, not result envelopes, and make no network
+requests. Local files are read as binary and base64-encoded into the block.
+Paths can be strings or objects implementing `to_path`, such as `Pathname`.
+Image MIME types are inferred from `.jpg`, `.jpeg`, `.png`, `.gif`, or `.webp`;
+PDF files use `.pdf`. Extensions are case-insensitive. File contents are not
+converted or validated as images/PDFs. Empty files and invalid arguments raise
+`ArgumentError`; file read errors propagate to the caller.
+
+HTTP/HTTPS URLs are passed unchanged for Claude to retrieve; AI Lite does not
+fetch them locally. URLs need no file extension and cannot contain credentials.
+Claude validates remote access and supported content. Local files are loaded
+fully into memory, and base64 increases request size. Claude enforces request,
+image, document, and model limits; these helpers do not resize images, count PDF
+pages, decrypt PDFs, or use the Files API.
+
+`pdf_input` optionally accepts a string `title:` and boolean `citations:`.
+Citations remain in the native assistant content blocks (or debug response),
+not the plain display text. For additional native fields or existing `file_id`
+references, construct or extend the returned content blocks directly. Preserve
+these user messages in your history when continuing a conversation.
+
+See Claude’s [vision guide](https://platform.claude.com/docs/en/build-with-claude/vision)
+and [PDF guide](https://platform.claude.com/docs/en/build-with-claude/pdf-support).
+
+## Shared return format
 
 Generation methods, `available_models`, and `check_configured_models` return a hash envelope.
 `configured_models` returns a plain hash; `model_available?` returns `true`, `false`, or `nil`.
@@ -1354,11 +1751,42 @@ result = ai.chat("Say hello", debug: true)
 }
 ```
 
+## Migrating to provider namespaces
+
+Use `AiLite::OpenAI` for OpenAI configuration, class methods, and instances.
+OpenAI owns its API URLs, defaults, configuration, HTTP requests, and response handling.
+Gemini has its own configuration, requests, and response handling; provider capabilities are implemented separately.
+
+Existing `AiLite.new`, `AiLite.chat`, and the other top-level methods continue to
+forward to OpenAI, sharing the same configuration and cached client. They emit a
+deprecation warning to stderr once per legacy entry point per process. They will
+remain available throughout v1.x and will be removed in v2.0.
+
+```ruby
+# Before
+AiLite.configure { |config| config.api_key = ENV["OPENAI_API_KEY"] }
+ai = AiLite.new
+
+# After
+AiLite::OpenAI.configure { |config| config.api_key = ENV["OPENAI_API_KEY"] }
+ai = AiLite::OpenAI.new
+# Class methods work too: AiLite::OpenAI.chat("Hello")
+```
+
+`AiLite.new` returns an `AiLite::OpenAI` instance. Compatibility covers documented
+construction, configuration, utility methods, and constants; subclassing the legacy
+`AiLite` class or relying on its exact instance class is not supported. Migrate such
+code to `AiLite::OpenAI`.
+
+Existing utility calls keep their methods and result envelopes. Legacy
+constants such as `AiLite::DEFAULT_MODEL` and `AiLite::Configuration` remain
+aliases for their OpenAI counterparts. The gem version stays at `AiLite::VERSION`.
+
 ## Development
 
 Compatibility CI runs the full suite on Ruby 2.6, 2.7, 3.0, 3.1, 3.2, 3.3,
 3.4, and 4.0. Tests include building and installing the gem in isolation and
-loading both providers without third-party runtime gems. These are Ruby tests;
+loading all three providers without third-party runtime gems. These are Ruby tests;
 they do not constitute a Rails integration matrix.
 
 Install the test dependency (not a runtime dependency):

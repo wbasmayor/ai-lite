@@ -10,7 +10,7 @@ Gem::Specification.new do |spec|
 
     AI Lite handles the API calls while you control your application's architecture, providing straightforward AI integration without a larger SDK or framework. Supports Ruby 2.6 through 4.0 with no Rails dependency.
 
-    OpenAI and Gemini support chat, streaming, function calling, embeddings, image generation, speech, transcription, token counting, and model checks. OpenAI also supports moderation. Gemini also supports structured media inputs and a YouTube helper. Claude supports synchronous chat and explicit message history.
+    OpenAI and Gemini support chat, streaming, function calling, embeddings, image generation, speech, transcription, token counting, and model checks. OpenAI also supports moderation. Gemini also supports structured media inputs and a YouTube helper. Claude supports chat, streaming, function calling, token counting, model checks, and image/PDF input helpers with explicit message history.
   DESCRIPTION
   spec.homepage = "https://github.com/wbasmayor/ai-lite"
   spec.license = "MIT"

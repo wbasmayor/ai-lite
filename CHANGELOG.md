@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.4.0 (2026-11-24)
+
+- Add Claude image/PDF content-block helpers for local files and URLs, including
+  optional PDF titles/citations and use with chat, streaming, and token counting.
+
+- Add Claude model listing with pagination, exact availability checks, local
+  configuration snapshots, and configured-model reports.
+
+- Add Claude `count_tokens` for text and native message history, with instructions,
+  native counting options, integer results, and the standard error/debug envelope.
+
+- Add Claude native tool definitions, normalized tool calls, and manual tool-result
+  continuation with explicit history for chat and streaming.
+
+- Add Claude `chat_stream` with incremental text, replayable assistant content,
+  thinking/signature preservation, assembled debug usage, and stream error handling.
+
 ## 1.3.0 (2026-11-10)
 
 - Begin Claude support with independent configuration, stdlib Messages transport,

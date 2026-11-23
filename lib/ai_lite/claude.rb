@@ -3,7 +3,12 @@ require "net/http"
 require "uri"
 require_relative "version"
 require_relative "claude/configuration"
+require_relative "claude/tool_calling"
 require_relative "claude/chat"
+require_relative "claude/streaming"
+require_relative "claude/tokens"
+require_relative "claude/models"
+require_relative "claude/media"
 
 class AiLite
   class Claude
@@ -30,6 +35,14 @@ class AiLite
 
       def reset_client!
         @client = nil
+      end
+
+      def chat_stream(message, **kwargs, &block)
+        client.chat_stream(message, **kwargs, &block)
+      end
+
+      def count_tokens(input, **kwargs)
+        client.count_tokens(input, **kwargs)
       end
 
       def chat(message, **kwargs)

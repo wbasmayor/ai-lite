@@ -61,7 +61,7 @@ class ClaudeTest < Minitest::Test
     assert_equal previous, AiLite::OpenAI.configuration.model
     AiLite::Claude.reset_configuration!
     assert_equal "claude-haiku-5-5", AiLite::Claude.new.model
-    %i[chat_stream embed speak transcribe image moderate count_tokens available_models].each { |method| refute_respond_to @client, method }
+    %i[embed speak transcribe image moderate].each { |method| refute_respond_to @client, method }
   end
 
   def test_chat_transport_and_replay_message
@@ -153,4 +153,112 @@ class ClaudeTest < Minitest::Test
       assert_nil http.request_received
     end
   end
+  def tool_body
+    body("Checking", "tool_use").merge("content" => body["content"] + [
+      { "type" => "tool_use", "id" => "a", "name" => "lookup", "input" => { "id" => 1 } },
+      { "type" => "tool_use", "id" => "b", "name" => "lookup", "input" => { "id" => 2 } }
+    ])
+  end
+
+  def test_tools_and_explicit_history_continuation
+    tools = [{ name: "lookup", input_schema: { type: "object" }, cache_control: { type: "ephemeral" } }]
+    history = [{ role: "user", content: "Check both" }]
+    AiLite::Claude.configure { |c| c.api_key = "test" }
+    with_http(tool_body) do |http|
+      result = AiLite::Claude.chat(history, tools: tools, options: { tools: [], tool_choice: { type: "auto" } })
+      assert_nil result["error"]
+      assert_nil result["raw"]
+      assert_equal ["a", "b"], result["tool_calls"].map { |call| call["id"] }
+      assert_equal({ "id" => 1 }, result["tool_calls"][0]["arguments"])
+      assert_equal JSON.parse(JSON.generate(tools)), JSON.parse(http.request_received.body)["tools"]
+      history << result["assistant_message"]
+    end
+    results = [{ id: "b", name: "lookup", output: "failed", is_error: true },
+               { "id" => "a", "name" => "lookup", "output" => { ok: true } }]
+    before = Marshal.dump([history, results, tools])
+    with_http do |http|
+      assert_nil @client.chat(history, tools: tools, tool_results: results)["error"]
+      messages = JSON.parse(http.request_received.body)["messages"]
+      assert_equal JSON.parse(JSON.generate(history)), messages[0...-1]
+      assert_equal "sig", messages[1]["content"][0]["signature"]
+      assert_equal "user", messages.last["role"]
+      assert_equal({ "type" => "tool_result", "tool_use_id" => "b", "content" => "failed", "is_error" => true }, messages.last["content"][0])
+      assert_equal '{"ok":true}', messages.last["content"][1]["content"]
+      @client.chat("Hi", tools: [], options: { tools: tools })
+      assert_equal [], JSON.parse(http.request_received.body)["tools"]
+      @client.chat("Hi", options: { tools: tools })
+      assert_equal JSON.parse(JSON.generate(tools)), JSON.parse(http.request_received.body)["tools"]
+    end
+    assert_equal before, Marshal.dump([history, results, tools])
+  end
+
+  def test_invalid_tool_results_do_not_send_requests
+    history = [{ role: "assistant", content: tool_body["content"] }]
+    valid = [{ id: "a", name: "lookup", output: nil }, { id: "b", name: "lookup", output: false }]
+    invalid = [[], {}, [nil], valid[0..0], [valid[0], valid[0]],
+      [valid[0].merge(id: "wrong"), valid[1]], [valid[0].merge(name: "wrong"), valid[1]],
+      [valid[0].reject { |key, _| key == :output }, valid[1]],
+      [valid[0].merge(is_error: "yes"), valid[1]]]
+    with_http do |http|
+      invalid.each { |results| refute_nil @client.chat(history, tool_results: results)["error"] }
+      [nil, "hello", [{ role: "user", content: "Hi" }]].each do |message|
+        refute_nil @client.chat(message, tool_results: valid)["error"]
+      end
+      refute_nil @client.chat("Hi", tools: {})["error"]
+      refute_nil @client.chat("Hi", options: { tools: [1] })["error"]
+      assert_nil http.request_received
+    end
+  end
+
+  def test_incomplete_or_invalid_calls_are_not_executable
+    %w[max_tokens refusal pause_turn].each do |reason|
+      with_http(tool_body.merge("stop_reason" => reason)) do
+        result = @client.chat("Hi")
+        refute_nil result["error"]
+        refute result.key?("tool_calls")
+      end
+    end
+    bad = [{ "input" => "{}" }, { "id" => "" }, { "name" => nil }, { "id" => "a" }]
+    bad.each do |change|
+      raw = tool_body
+      raw["content"][-1].merge!(change)
+      with_http(raw) do
+        result = @client.chat("Hi")
+        refute_nil result["error"]
+        refute result.key?("tool_calls")
+        assert_equal "Hello", result["content"]
+        assert_equal raw["content"], result["assistant_message"]["content"]
+      end
+    end
+    raw = tool_body
+    raw["content"] = raw["content"].select { |part| part["type"] == "tool_use" }
+    with_http(raw) do
+      result = @client.chat("Hi")
+      assert_nil result["content"]
+      assert_nil result["error"]
+      assert_equal 2, result["tool_calls"].length
+    end
+    with_http(body.merge("content" => [{ "type" => "server_tool_use", "id" => "s", "name" => "web_search", "input" => {} }])) do
+      refute @client.chat("Hi").key?("tool_calls")
+    end
+  end
+
+  def test_media_helper_blocks_pass_through_chat_and_counting
+    history = [{ role: "user", content: [
+      @client.image_input(url: "https://example.com/image"),
+      @client.pdf_input(url: "https://example.com/report", title: "Report", citations: true),
+      { type: "text", text: "Compare these." }
+    ] }]
+    before = Marshal.dump(history)
+    with_http do |http|
+      assert_nil @client.chat(history)["error"]
+      assert_equal JSON.parse(JSON.generate(history)), JSON.parse(http.request_received.body)["messages"]
+    end
+    with_http({ "input_tokens" => 50 }) do |http|
+      assert_equal 50, @client.count_tokens(history)["content"]
+      assert_equal JSON.parse(JSON.generate(history)), JSON.parse(http.request_received.body)["messages"]
+    end
+    assert_equal before, Marshal.dump(history)
+  end
+
 end
